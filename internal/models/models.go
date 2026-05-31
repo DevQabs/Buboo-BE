@@ -393,53 +393,47 @@ type SymbolTaxSummary struct {
 }
 
 // ─────────────────────────────────────────────
-//  OtherAsset (기타 자산 — 부동산·예금·가상화폐 등)
+//  OtherAsset (기타 자산 — 부동산·예금·현금·대출 등)
 // ─────────────────────────────────────────────
 
 // OtherAssetType categorises non-stock assets.
-// 향후 타입별 계산 로직(이자, 감가상각 등)을 붙이기 위해 명시적으로 정의.
 type OtherAssetType string
 
 const (
-	AssetTypeRealEstate OtherAssetType = "부동산"   // 아파트, 토지 등
-	AssetTypeDeposit    OtherAssetType = "예/적금"  // 정기예금, 적금
-	AssetTypeCash       OtherAssetType = "현금"    // 현금성 자산
-	AssetTypeCrypto     OtherAssetType = "가상화폐" // 비트코인, 이더리움 등
-	AssetTypeVehicle    OtherAssetType = "차량"    // 자동차
-	AssetTypeInsurance  OtherAssetType = "보험"    // 연금보험, 저축보험
-	AssetTypeLoan       OtherAssetType = "대출"    // 부채 — 주택담보대출, 신용대출 등
-	AssetTypeOther      OtherAssetType = "기타"    // 미분류
+	AssetTypeRealEstate OtherAssetType = "부동산"  // 아파트, 토지 등
+	AssetTypeDeposit    OtherAssetType = "예/적금" // 정기예금, 적금
+	AssetTypeCash       OtherAssetType = "현금"   // 현금성 자산 (KRW/USD)
+	AssetTypeLoan       OtherAssetType = "대출"   // 부채 — 주택담보대출, 신용대출 등
+	AssetTypeOther      OtherAssetType = "기타"   // 미분류
 )
 
 // OtherAsset represents a non-stock asset entry (real estate, deposits, etc.).
 type OtherAsset struct {
-	ID           string         `json:"id"`
-	CoupleID     string         `json:"couple_id"`
-	UserID       string         `json:"user_id"`
-	AssetType    OtherAssetType `json:"asset_type"`   // 자산 유형
-	Name         string         `json:"name"`          // 자산명, e.g. "강남 아파트"
-	Description  string         `json:"description"`   // 상세 설명
-	ValueKRW     int64          `json:"value_krw"`     // 현재 평가액 (원)
-	CostKRW      int64          `json:"cost_krw"`      // 취득 원가 (원)
-	Currency     string         `json:"currency"`      // 보통 "KRW", 해외 부동산은 다를 수 있음
-	IsLiability  bool           `json:"is_liability"`  // true이면 부채(대출 등)로 순자산에서 차감
-	IsLocked     bool           `json:"is_locked"`     // true이면 인출/처분 불가 자산 (비유동)
-	// 부동산 전용 확장 필드 (nullable — 비부동산 자산은 null)
-	Location     *Location      `json:"location"`      // 위경도 포함, 지도 연동 예정
-	// 예금/보험 전용
-	MaturityDate *time.Time     `json:"maturity_date"` // 만기일 (nullable)
-	InterestRate *float64       `json:"interest_rate"` // 연이율 % (nullable)
-	// 가상화폐 전용
-	CryptoSymbol *string        `json:"crypto_symbol"` // e.g. "BTC", "ETH" (nullable)
-	CryptoQty    *float64       `json:"crypto_qty"`    // 보유 수량 (nullable)
+	ID          string         `json:"id"`
+	CoupleID    string         `json:"couple_id"`
+	UserID      string         `json:"user_id"`
+	AssetType   OtherAssetType `json:"asset_type"`  // 자산 유형
+	Name        string         `json:"name"`         // 자산명
+	Description string         `json:"description"`  // 상세 설명
+	ValueKRW    int64          `json:"value_krw"`    // 현재 평가액 (원) — USD 현금은 환율 적용 후 값
+	ValueUSD    *float64       `json:"value_usd"`    // USD 현금 전용: 원본 USD 금액
+	CostKRW     int64          `json:"cost_krw"`     // 취득 원가 (원)
+	Currency    string         `json:"currency"`     // "KRW" | "USD"
+	IsLiability bool           `json:"is_liability"` // 대출이면 true (자동 결정)
+	IsLocked    bool           `json:"is_locked"`    // true이면 인출/처분 불가 자산 (비유동)
+	// 부동산 전용
+	Location *Location `json:"location"`
+	// 예/적금·대출 전용
+	MaturityDate *time.Time `json:"maturity_date"` // 만기일 (nullable)
+	InterestRate *float64   `json:"interest_rate"` // 연이율 % (nullable)
 	// 대출 전용
 	LoanType   string `json:"loan_type"`   // "만기일시상환" | "원리금균등상환" | "원금균등상환"
 	PaymentDay int    `json:"payment_day"` // 납입일 (1-28)
 	// 공통
-	Memo         string         `json:"memo"`
-	AcquiredAt   time.Time      `json:"acquired_at"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
+	Memo       string    `json:"memo"`
+	AcquiredAt time.Time `json:"acquired_at"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // OtherAssetsFile mirrors the top-level structure of other_assets.json.
@@ -454,15 +448,13 @@ type CreateOtherAssetRequest struct {
 	Name         string         `json:"name"`
 	Description  string         `json:"description"`
 	ValueKRW     int64          `json:"value_krw"`
+	ValueUSD     *float64       `json:"value_usd"`  // USD 현금 전용
 	CostKRW      int64          `json:"cost_krw"`
 	Currency     string         `json:"currency"`
-	IsLiability  bool           `json:"is_liability"`
 	IsLocked     bool           `json:"is_locked"`
 	Location     *Location      `json:"location"`
 	MaturityDate *time.Time     `json:"maturity_date"`
 	InterestRate *float64       `json:"interest_rate"`
-	CryptoSymbol *string        `json:"crypto_symbol"`
-	CryptoQty    *float64       `json:"crypto_qty"`
 	LoanType     string         `json:"loan_type"`
 	PaymentDay   int            `json:"payment_day"`
 	Memo         string         `json:"memo"`
@@ -476,14 +468,12 @@ type UpdateOtherAssetRequest struct {
 	Name         *string         `json:"name"`
 	Description  *string         `json:"description"`
 	ValueKRW     *int64          `json:"value_krw"`
+	ValueUSD     *float64        `json:"value_usd"` // USD 현금 전용
 	CostKRW      *int64          `json:"cost_krw"`
-	IsLiability  *bool           `json:"is_liability"`
 	IsLocked     *bool           `json:"is_locked"`
 	Location     *Location       `json:"location"`
 	MaturityDate *time.Time      `json:"maturity_date"`
 	InterestRate *float64        `json:"interest_rate"`
-	CryptoSymbol *string         `json:"crypto_symbol"`
-	CryptoQty    *float64        `json:"crypto_qty"`
 	LoanType     *string         `json:"loan_type"`
 	PaymentDay   *int            `json:"payment_day"`
 	Memo         *string         `json:"memo"`

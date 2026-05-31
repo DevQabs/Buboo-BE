@@ -966,27 +966,39 @@ func (h *Handler) refreshPrices(w http.ResponseWriter, r *http.Request) {
 //  Other Asset handlers  (/api/assets)
 // ─────────────────────────────────────────────
 
+// applyUSDCashRate rewrites ValueKRW for USD cash assets using the live rate.
+func applyUSDCashRate(assets []models.OtherAsset, usdKRW float64) {
+	for i := range assets {
+		if assets[i].AssetType == models.AssetTypeCash && strings.ToUpper(assets[i].Currency) == "USD" && assets[i].ValueUSD != nil {
+			assets[i].ValueKRW = int64(*assets[i].ValueUSD * usdKRW)
+		}
+	}
+}
+
 // listAssets returns all other assets for the couple.
 // Optional query param: ?type=부동산  (filters by asset_type)
 func (h *Handler) listAssets(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	assetType := r.URL.Query().Get("type")
 
+	var assets []models.OtherAsset
+	var err error
 	if assetType != "" {
-		assets, err := h.assetRepo.ListByType(ctx, h.coupleID, models.OtherAssetType(assetType))
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, err)
-			return
-		}
-		respondJSON(w, http.StatusOK, assets)
-		return
+		assets, err = h.assetRepo.ListByType(ctx, h.coupleID, models.OtherAssetType(assetType))
+	} else {
+		assets, err = h.assetRepo.ListByCouple(ctx, h.coupleID)
 	}
-
-	assets, err := h.assetRepo.ListByCouple(ctx, h.coupleID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	usdKRW, fxErr := h.priceSvc.FetchUSDKRW(ctx)
+	if fxErr != nil || usdKRW == 0 {
+		usdKRW = service.FallbackUSDKRW
+	}
+	applyUSDCashRate(assets, usdKRW)
+
 	respondJSON(w, http.StatusOK, assets)
 }
 
@@ -1003,13 +1015,10 @@ func (h *Handler) createAsset(w http.ResponseWriter, r *http.Request) {
 		errs = append(errs, "user_id is required")
 	}
 	if req.AssetType == "" {
-		errs = append(errs, "asset_type is required (부동산|예/적금|현금|가상화폐|차량|보험|기타)")
+		errs = append(errs, "asset_type is required (부동산|예/적금|현금|대출|기타)")
 	}
 	if req.Name == "" {
 		errs = append(errs, "name is required")
-	}
-	if req.ValueKRW < 0 {
-		errs = append(errs, "value_krw must be >= 0")
 	}
 	if len(errs) > 0 {
 		respondJSON(w, http.StatusBadRequest, map[string]any{
@@ -1024,22 +1033,26 @@ func (h *Handler) createAsset(w http.ResponseWriter, r *http.Request) {
 	if req.AcquiredAt != nil {
 		acquiredAt = *req.AcquiredAt
 	}
-	currency := req.Currency
+	currency := strings.ToUpper(strings.TrimSpace(req.Currency))
 	if currency == "" {
 		currency = "KRW"
 	}
 
-	// 대출은 항상 부채; 예/적금은 절대 부채 아님
-	isLiability := req.IsLiability
-	if req.AssetType == models.AssetTypeLoan {
-		isLiability = true
-	} else if req.AssetType == models.AssetTypeDeposit {
-		isLiability = false
-	}
-	// 부채 자산은 인출불가 구분 불필요
+	// IsLiability 자동 결정 — 대출만 부채
+	isLiability := req.AssetType == models.AssetTypeLoan
 	isLocked := req.IsLocked
 	if isLiability {
 		isLocked = false
+	}
+
+	// USD 현금: 환율 적용해 ValueKRW 계산
+	valueKRW := req.ValueKRW
+	if req.AssetType == models.AssetTypeCash && currency == "USD" && req.ValueUSD != nil {
+		usdKRW, fxErr := h.priceSvc.FetchUSDKRW(r.Context())
+		if fxErr != nil || usdKRW == 0 {
+			usdKRW = service.FallbackUSDKRW
+		}
+		valueKRW = int64(*req.ValueUSD * usdKRW)
 	}
 
 	asset := &models.OtherAsset{
@@ -1048,7 +1061,8 @@ func (h *Handler) createAsset(w http.ResponseWriter, r *http.Request) {
 		AssetType:    req.AssetType,
 		Name:         req.Name,
 		Description:  req.Description,
-		ValueKRW:     req.ValueKRW,
+		ValueKRW:     valueKRW,
+		ValueUSD:     req.ValueUSD,
 		CostKRW:      req.CostKRW,
 		Currency:     currency,
 		IsLiability:  isLiability,
@@ -1056,8 +1070,6 @@ func (h *Handler) createAsset(w http.ResponseWriter, r *http.Request) {
 		Location:     req.Location,
 		MaturityDate: req.MaturityDate,
 		InterestRate: req.InterestRate,
-		CryptoSymbol: req.CryptoSymbol,
-		CryptoQty:    req.CryptoQty,
 		LoanType:     req.LoanType,
 		PaymentDay:   req.PaymentDay,
 		Memo:         req.Memo,
@@ -1073,11 +1085,19 @@ func (h *Handler) createAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id := chi.URLParam(r, "id")
-	asset, err := h.assetRepo.GetByID(r.Context(), id)
+	asset, err := h.assetRepo.GetByID(ctx, id)
 	if err != nil {
 		respondError(w, http.StatusNotFound, err)
 		return
+	}
+	if asset.AssetType == models.AssetTypeCash && strings.ToUpper(asset.Currency) == "USD" && asset.ValueUSD != nil {
+		usdKRW, fxErr := h.priceSvc.FetchUSDKRW(ctx)
+		if fxErr != nil || usdKRW == 0 {
+			usdKRW = service.FallbackUSDKRW
+		}
+		asset.ValueKRW = int64(*asset.ValueUSD * usdKRW)
 	}
 	respondJSON(w, http.StatusOK, asset)
 }
@@ -1112,11 +1132,11 @@ func (h *Handler) updateAsset(w http.ResponseWriter, r *http.Request) {
 	if req.ValueKRW != nil {
 		existing.ValueKRW = *req.ValueKRW
 	}
+	if req.ValueUSD != nil {
+		existing.ValueUSD = req.ValueUSD
+	}
 	if req.CostKRW != nil {
 		existing.CostKRW = *req.CostKRW
-	}
-	if req.IsLiability != nil {
-		existing.IsLiability = *req.IsLiability
 	}
 	if req.IsLocked != nil {
 		existing.IsLocked = *req.IsLocked
@@ -1130,12 +1150,6 @@ func (h *Handler) updateAsset(w http.ResponseWriter, r *http.Request) {
 	if req.InterestRate != nil {
 		existing.InterestRate = req.InterestRate
 	}
-	if req.CryptoSymbol != nil {
-		existing.CryptoSymbol = req.CryptoSymbol
-	}
-	if req.CryptoQty != nil {
-		existing.CryptoQty = req.CryptoQty
-	}
 	if req.LoanType != nil {
 		existing.LoanType = *req.LoanType
 	}
@@ -1146,12 +1160,19 @@ func (h *Handler) updateAsset(w http.ResponseWriter, r *http.Request) {
 		existing.Memo = *req.Memo
 	}
 
-	// Re-enforce 대출/예금 liability rules on update
-	if existing.AssetType == models.AssetTypeLoan {
-		existing.IsLiability = true
+	// IsLiability 항상 타입으로 결정
+	existing.IsLiability = existing.AssetType == models.AssetTypeLoan
+	if existing.IsLiability {
 		existing.IsLocked = false
-	} else if existing.AssetType == models.AssetTypeDeposit {
-		existing.IsLiability = false
+	}
+
+	// USD 현금: ValueKRW 재계산
+	if existing.AssetType == models.AssetTypeCash && strings.ToUpper(existing.Currency) == "USD" && existing.ValueUSD != nil {
+		usdKRW, fxErr := h.priceSvc.FetchUSDKRW(ctx)
+		if fxErr != nil || usdKRW == 0 {
+			usdKRW = service.FallbackUSDKRW
+		}
+		existing.ValueKRW = int64(*existing.ValueUSD * usdKRW)
 	}
 
 	updated, err := h.assetRepo.Update(ctx, existing)
@@ -1176,12 +1197,19 @@ func (h *Handler) deleteAsset(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) netWorth(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	// 주식 포트폴리오 합산 (USD/KRW 환율 적용)
+	usdKRW, fxErr := h.priceSvc.FetchUSDKRW(ctx)
+	if fxErr != nil || usdKRW == 0 {
+		usdKRW = service.FallbackUSDKRW
+	}
+
 	// 기타 자산 합산
 	otherAssets, err := h.assetRepo.ListByCouple(ctx, h.coupleID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+	applyUSDCashRate(otherAssets, usdKRW)
 	var assetValueKRW, liabilityKRW int64
 	for _, a := range otherAssets {
 		if a.IsLiability {
@@ -1189,12 +1217,6 @@ func (h *Handler) netWorth(w http.ResponseWriter, r *http.Request) {
 		} else {
 			assetValueKRW += a.ValueKRW
 		}
-	}
-
-	// 주식 포트폴리오 합산 (USD/KRW 환율 적용)
-	usdKRW, fxErr := h.priceSvc.FetchUSDKRW(ctx)
-	if fxErr != nil || usdKRW == 0 {
-		usdKRW = service.FallbackUSDKRW
 	}
 
 	stocks, _ := h.stockRepo.ListByCouple(ctx, h.coupleID)
