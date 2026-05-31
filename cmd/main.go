@@ -38,6 +38,7 @@ func main() {
 		divRepo      repository.DividendRepository
 		scheduleRepo repository.ScheduleRepository
 		diaryRepo    repository.DiaryRepository
+		catRepo      repository.CategoryRepository
 	)
 
 	if os.Getenv("DATABASE_URL") != "" {
@@ -55,6 +56,7 @@ func main() {
 		divRepo      = repository.NewPgDividendRepository(pool)
 		scheduleRepo = repository.NewPgScheduleRepository(pool)
 		diaryRepo    = repository.NewPgDiaryRepository(pool)
+		catRepo      = repository.NewPgCategoryRepository(pool)
 	} else {
 		log.Println("⚠️  DATABASE_URL 미설정 — 파일 기반 저장소 사용")
 		txRepo       = repository.NewFileTransactionRepository(filepath.Join(dataDir, "transactions.json"))
@@ -66,6 +68,7 @@ func main() {
 		divRepo      = repository.NewFileDividendRepository(filepath.Join(dataDir, "dividends.json"))
 		scheduleRepo = repository.NewFileScheduleRepository(filepath.Join(dataDir, "schedules.json"))
 		diaryRepo    = repository.NewFileDiaryRepository(filepath.Join(dataDir, "diaries.json"))
+		catRepo      = repository.NewFileCategoryRepository(filepath.Join(dataDir, "categories.json"))
 	}
 
 	// ── S3-compatible Storage ─────────────────────────────────────────────────
@@ -96,7 +99,7 @@ func main() {
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := handler.New(
 		txRepo, stockRepo, stxRepo, userRepo, assetRepo,
-		feRepo, divRepo, scheduleRepo, diaryRepo,
+		feRepo, divRepo, scheduleRepo, diaryRepo, catRepo,
 		priceSvc, savingSvc, coupleID, allowedOrigins, uploadsDir, stor,
 	).NewRouter()
 

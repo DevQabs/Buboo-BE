@@ -686,3 +686,9 @@ type ApplyFixedExpensesResult struct {
 	Skipped int           `json:"skipped"` // already applied this month
 	Total   int           `json:"total"`   // active FE count
 }
+
+// Categories stores the couple's customizable transaction category lists.
+type Categories struct {
+	Expense []string `json:"expense"`
+	Income  []string `json:"income"`
+}

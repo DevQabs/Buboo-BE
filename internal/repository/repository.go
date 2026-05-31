@@ -216,6 +216,15 @@ type DiaryRepository interface {
 }
 
 // ─────────────────────────────────────────────
+//  Category Repository
+// ─────────────────────────────────────────────
+
+type CategoryRepository interface {
+	Get(ctx context.Context, coupleID string) (*models.Categories, error)
+	Update(ctx context.Context, coupleID string, cats *models.Categories) (*models.Categories, error)
+}
+
+// ─────────────────────────────────────────────
 //  OtherAsset Repository
 // ─────────────────────────────────────────────
 

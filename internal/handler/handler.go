@@ -40,6 +40,7 @@ type Handler struct {
 	divRepo      repository.DividendRepository
 	scheduleRepo repository.ScheduleRepository
 	diaryRepo    repository.DiaryRepository
+	catRepo      repository.CategoryRepository
 	priceSvc     *service.PriceService
 	savingSvc    *service.SavingService
 	coupleID     string
@@ -58,6 +59,7 @@ func New(
 	divRepo repository.DividendRepository,
 	scheduleRepo repository.ScheduleRepository,
 	diaryRepo repository.DiaryRepository,
+	catRepo repository.CategoryRepository,
 	priceSvc *service.PriceService,
 	savingSvc *service.SavingService,
 	coupleID string,
@@ -75,6 +77,7 @@ func New(
 		divRepo:      divRepo,
 		scheduleRepo: scheduleRepo,
 		diaryRepo:    diaryRepo,
+		catRepo:      catRepo,
 		priceSvc:     priceSvc,
 		savingSvc:    savingSvc,
 		coupleID:     coupleID,
@@ -118,6 +121,10 @@ func (h *Handler) NewRouter() chi.Router {
 		// Couple
 		r.Get("/couple", h.getCouple)
 		r.Put("/couple", h.updateCouple)
+
+		// Categories
+		r.Get("/categories", h.getCategories)
+		r.Put("/categories", h.updateCategories)
 
 		// Transactions
 		r.Route("/transactions", func(r chi.Router) {
@@ -2048,4 +2055,29 @@ func (h *Handler) serveUpload(w http.ResponseWriter, r *http.Request) {
 	filename := chi.URLParam(r, "filename")
 	filename = filepath.Base(filename)
 	http.ServeFile(w, r, filepath.Join(h.uploadsDir, filename))
+}
+
+// getCategories — GET /api/categories
+func (h *Handler) getCategories(w http.ResponseWriter, r *http.Request) {
+	cats, err := h.catRepo.Get(r.Context(), h.coupleID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, cats)
+}
+
+// updateCategories — PUT /api/categories
+func (h *Handler) updateCategories(w http.ResponseWriter, r *http.Request) {
+	var cats models.Categories
+	if err := json.NewDecoder(r.Body).Decode(&cats); err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	updated, err := h.catRepo.Update(r.Context(), h.coupleID, &cats)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, updated)
 }
