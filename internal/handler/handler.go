@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -22,6 +23,7 @@ import (
 	"github.com/yourname/couple-app/internal/models"
 	"github.com/yourname/couple-app/internal/repository"
 	"github.com/yourname/couple-app/internal/service"
+	supstorage "github.com/yourname/couple-app/internal/storage"
 )
 
 // ─────────────────────────────────────────────
@@ -43,6 +45,7 @@ type Handler struct {
 	coupleID     string
 	allowOrigins []string
 	uploadsDir   string
+	stor         *supstorage.SupabaseStorage
 }
 
 func New(
@@ -60,6 +63,7 @@ func New(
 	coupleID string,
 	allowOrigins []string,
 	uploadsDir string,
+	stor *supstorage.SupabaseStorage,
 ) *Handler {
 	return &Handler{
 		txRepo:       txRepo,
@@ -76,6 +80,7 @@ func New(
 		coupleID:     coupleID,
 		allowOrigins: allowOrigins,
 		uploadsDir:   uploadsDir,
+		stor:         stor,
 	}
 }
 
@@ -1893,9 +1898,12 @@ func (h *Handler) deleteDiary(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-	// Delete associated photo files
-	for _, photo := range entry.Photos {
-		_ = os.Remove(filepath.Join(h.uploadsDir, photo))
+	for _, photoURL := range entry.Photos {
+		if h.stor != nil {
+			_ = h.stor.Delete(path.Base(photoURL))
+		} else {
+			_ = os.Remove(filepath.Join(h.uploadsDir, filepath.Base(photoURL)))
+		}
 	}
 	if err := h.diaryRepo.Delete(r.Context(), id); err != nil {
 		respondError(w, http.StatusInternalServerError, err)
@@ -1910,7 +1918,7 @@ func (h *Handler) uploadDiaryPhoto(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-	if err := r.ParseMultipartForm(10 << 20); err != nil { // 10 MB
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		respondError(w, http.StatusBadRequest, fmt.Errorf("file too large"))
 		return
 	}
@@ -1923,37 +1931,65 @@ func (h *Handler) uploadDiaryPhoto(w http.ResponseWriter, r *http.Request) {
 
 	ext := filepath.Ext(header.Filename)
 	filename := uuid.NewString() + ext
-	dst := filepath.Join(h.uploadsDir, filename)
 
-	if err := os.MkdirAll(h.uploadsDir, 0755); err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	out, err := os.Create(dst)
+	data, err := io.ReadAll(file)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
-	defer out.Close()
-	if _, err := io.Copy(out, file); err != nil {
+
+	var photoURL string
+	if h.stor != nil {
+		contentType := header.Header.Get("Content-Type")
+		if contentType == "" {
+			contentType = "image/jpeg"
+		}
+		publicURL, err := h.stor.Upload(filename, data, contentType)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
+		photoURL = publicURL
+	} else {
+		dst := filepath.Join(h.uploadsDir, filename)
+		if err := os.MkdirAll(h.uploadsDir, 0755); err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if err := os.WriteFile(dst, data, 0644); err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
+		photoURL = "/uploads/" + filename
+	}
+
+	if err := h.diaryRepo.AddPhoto(r.Context(), id, photoURL); err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if err := h.diaryRepo.AddPhoto(r.Context(), id, filename); err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	respondJSON(w, http.StatusCreated, map[string]string{"filename": filename, "url": "/uploads/" + filename})
+	respondJSON(w, http.StatusCreated, map[string]string{"filename": filename, "url": photoURL})
 }
 
 func (h *Handler) deleteDiaryPhoto(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	filename := chi.URLParam(r, "filename")
-	if err := h.diaryRepo.DeletePhoto(r.Context(), id, filename); err != nil {
+
+	var photoURL string
+	if h.stor != nil {
+		photoURL = h.stor.PublicURL(filename)
+		if err := h.stor.Delete(filename); err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
+	} else {
+		photoURL = "/uploads/" + filename
+		_ = os.Remove(filepath.Join(h.uploadsDir, filename))
+	}
+
+	if err := h.diaryRepo.DeletePhoto(r.Context(), id, photoURL); err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
-	_ = os.Remove(filepath.Join(h.uploadsDir, filename))
 	w.WriteHeader(http.StatusNoContent)
 }
 
