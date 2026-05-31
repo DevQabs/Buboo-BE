@@ -101,6 +101,9 @@ func (h *Handler) NewRouter() chi.Router {
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	r.Head("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 
 	r.Route("/api", func(r chi.Router) {
 
