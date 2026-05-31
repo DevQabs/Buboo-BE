@@ -111,11 +111,16 @@ CREATE TABLE IF NOT EXISTS other_assets (
     interest_rate DOUBLE PRECISION,
     crypto_symbol TEXT,
     crypto_qty DOUBLE PRECISION,
+    loan_type TEXT NOT NULL DEFAULT '',
+    payment_day INT NOT NULL DEFAULT 0,
     memo TEXT NOT NULL DEFAULT '',
     acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Migration: add loan columns if table already exists
+ALTER TABLE other_assets ADD COLUMN IF NOT EXISTS loan_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE other_assets ADD COLUMN IF NOT EXISTS payment_day INT NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS fixed_expenses (
     id TEXT PRIMARY KEY,

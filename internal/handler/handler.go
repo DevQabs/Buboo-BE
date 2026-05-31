@@ -1029,6 +1029,19 @@ func (h *Handler) createAsset(w http.ResponseWriter, r *http.Request) {
 		currency = "KRW"
 	}
 
+	// 대출은 항상 부채; 예/적금은 절대 부채 아님
+	isLiability := req.IsLiability
+	if req.AssetType == models.AssetTypeLoan {
+		isLiability = true
+	} else if req.AssetType == models.AssetTypeDeposit {
+		isLiability = false
+	}
+	// 부채 자산은 인출불가 구분 불필요
+	isLocked := req.IsLocked
+	if isLiability {
+		isLocked = false
+	}
+
 	asset := &models.OtherAsset{
 		CoupleID:     h.coupleID,
 		UserID:       req.UserID,
@@ -1038,13 +1051,15 @@ func (h *Handler) createAsset(w http.ResponseWriter, r *http.Request) {
 		ValueKRW:     req.ValueKRW,
 		CostKRW:      req.CostKRW,
 		Currency:     currency,
-		IsLiability:  req.IsLiability,
-		IsLocked:     req.IsLocked,
+		IsLiability:  isLiability,
+		IsLocked:     isLocked,
 		Location:     req.Location,
 		MaturityDate: req.MaturityDate,
 		InterestRate: req.InterestRate,
 		CryptoSymbol: req.CryptoSymbol,
 		CryptoQty:    req.CryptoQty,
+		LoanType:     req.LoanType,
+		PaymentDay:   req.PaymentDay,
 		Memo:         req.Memo,
 		AcquiredAt:   acquiredAt,
 	}
@@ -1121,8 +1136,22 @@ func (h *Handler) updateAsset(w http.ResponseWriter, r *http.Request) {
 	if req.CryptoQty != nil {
 		existing.CryptoQty = req.CryptoQty
 	}
+	if req.LoanType != nil {
+		existing.LoanType = *req.LoanType
+	}
+	if req.PaymentDay != nil {
+		existing.PaymentDay = *req.PaymentDay
+	}
 	if req.Memo != nil {
 		existing.Memo = *req.Memo
+	}
+
+	// Re-enforce 대출/예금 liability rules on update
+	if existing.AssetType == models.AssetTypeLoan {
+		existing.IsLiability = true
+		existing.IsLocked = false
+	} else if existing.AssetType == models.AssetTypeDeposit {
+		existing.IsLiability = false
 	}
 
 	updated, err := h.assetRepo.Update(ctx, existing)

@@ -407,6 +407,7 @@ const (
 	AssetTypeCrypto     OtherAssetType = "가상화폐" // 비트코인, 이더리움 등
 	AssetTypeVehicle    OtherAssetType = "차량"    // 자동차
 	AssetTypeInsurance  OtherAssetType = "보험"    // 연금보험, 저축보험
+	AssetTypeLoan       OtherAssetType = "대출"    // 부채 — 주택담보대출, 신용대출 등
 	AssetTypeOther      OtherAssetType = "기타"    // 미분류
 )
 
@@ -431,6 +432,9 @@ type OtherAsset struct {
 	// 가상화폐 전용
 	CryptoSymbol *string        `json:"crypto_symbol"` // e.g. "BTC", "ETH" (nullable)
 	CryptoQty    *float64       `json:"crypto_qty"`    // 보유 수량 (nullable)
+	// 대출 전용
+	LoanType   string `json:"loan_type"`   // "만기일시상환" | "원리금균등상환" | "원금균등상환"
+	PaymentDay int    `json:"payment_day"` // 납입일 (1-28)
 	// 공통
 	Memo         string         `json:"memo"`
 	AcquiredAt   time.Time      `json:"acquired_at"`
@@ -459,6 +463,8 @@ type CreateOtherAssetRequest struct {
 	InterestRate *float64       `json:"interest_rate"`
 	CryptoSymbol *string        `json:"crypto_symbol"`
 	CryptoQty    *float64       `json:"crypto_qty"`
+	LoanType     string         `json:"loan_type"`
+	PaymentDay   int            `json:"payment_day"`
 	Memo         string         `json:"memo"`
 	AcquiredAt   *time.Time     `json:"acquired_at"` // nullable — defaults to now
 }
@@ -478,6 +484,8 @@ type UpdateOtherAssetRequest struct {
 	InterestRate *float64        `json:"interest_rate"`
 	CryptoSymbol *string         `json:"crypto_symbol"`
 	CryptoQty    *float64        `json:"crypto_qty"`
+	LoanType     *string         `json:"loan_type"`
+	PaymentDay   *int            `json:"payment_day"`
 	Memo         *string         `json:"memo"`
 }
 

@@ -23,6 +23,7 @@ func NewPgOtherAssetRepository(db *pgxpool.Pool) *PgOtherAssetRepository {
 const assetCols = `id, couple_id, user_id, asset_type, name, description,
 	value_krw, cost_krw, currency, is_liability, is_locked,
 	location, maturity_date, interest_rate, crypto_symbol, crypto_qty,
+	loan_type, payment_day,
 	memo, acquired_at, created_at, updated_at`
 
 func scanAsset(row interface{ Scan(dest ...any) error }) (*models.OtherAsset, error) {
@@ -36,6 +37,7 @@ func scanAsset(row interface{ Scan(dest ...any) error }) (*models.OtherAsset, er
 		&a.ID, &a.CoupleID, &a.UserID, &a.AssetType, &a.Name, &a.Description,
 		&a.ValueKRW, &a.CostKRW, &a.Currency, &a.IsLiability, &a.IsLocked,
 		&locJSON, &maturity, &rate, &cryptoSym, &cryptoQty,
+		&a.LoanType, &a.PaymentDay,
 		&a.Memo, &a.AcquiredAt, &a.CreatedAt, &a.UpdatedAt,
 	); err != nil {
 		return nil, err
@@ -120,13 +122,14 @@ func (r *PgOtherAssetRepository) Create(ctx context.Context, asset *models.Other
 		`INSERT INTO other_assets
 		 (id, couple_id, user_id, asset_type, name, description, value_krw, cost_krw,
 		  currency, is_liability, is_locked, location, maturity_date, interest_rate,
-		  crypto_symbol, crypto_qty, memo, acquired_at, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+		  crypto_symbol, crypto_qty, loan_type, payment_day, memo, acquired_at, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
 		asset.ID, asset.CoupleID, asset.UserID, string(asset.AssetType),
 		asset.Name, asset.Description, asset.ValueKRW, asset.CostKRW,
 		asset.Currency, asset.IsLiability, asset.IsLocked,
 		locJSON, asset.MaturityDate, asset.InterestRate,
 		asset.CryptoSymbol, asset.CryptoQty,
+		asset.LoanType, asset.PaymentDay,
 		asset.Memo, asset.AcquiredAt, asset.CreatedAt, asset.UpdatedAt,
 	)
 	if err != nil {
@@ -148,13 +151,14 @@ func (r *PgOtherAssetRepository) Update(ctx context.Context, asset *models.Other
 		 asset_type=$2, name=$3, description=$4, value_krw=$5, cost_krw=$6,
 		 currency=$7, is_liability=$8, is_locked=$9, location=$10,
 		 maturity_date=$11, interest_rate=$12, crypto_symbol=$13, crypto_qty=$14,
-		 memo=$15, updated_at=$16
+		 loan_type=$15, payment_day=$16, memo=$17, updated_at=$18
 		 WHERE id=$1`,
 		asset.ID, string(asset.AssetType), asset.Name, asset.Description,
 		asset.ValueKRW, asset.CostKRW, asset.Currency,
 		asset.IsLiability, asset.IsLocked, locJSON,
 		asset.MaturityDate, asset.InterestRate,
 		asset.CryptoSymbol, asset.CryptoQty,
+		asset.LoanType, asset.PaymentDay,
 		asset.Memo, asset.UpdatedAt,
 	)
 	if err != nil {
