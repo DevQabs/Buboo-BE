@@ -1,83 +1,66 @@
-// Package storage provides Supabase Storage operations for file uploads.
+// Package storage provides S3-compatible storage operations for file uploads.
 package storage
 
 import (
 	"bytes"
+	"context"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
-	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-const bucket = "diary-photos"
-
-// SupabaseStorage uploads/deletes files via Supabase Storage REST API.
+// SupabaseStorage uploads/deletes files via S3-compatible API.
 type SupabaseStorage struct {
-	projectURL string // e.g. https://xxx.supabase.co
-	serviceKey string // service_role key
-	client     *http.Client
+	client     *s3.Client
+	bucket     string
+	publicBase string // public URL base for constructing file URLs
 }
 
-func New(projectURL, serviceKey string) *SupabaseStorage {
-	return &SupabaseStorage{
-		projectURL: strings.TrimRight(projectURL, "/"),
-		serviceKey: serviceKey,
-		client:     &http.Client{Timeout: 30 * time.Second},
+func New(endpoint, accessKeyID, secretAccessKey, bucket, publicBase string) *SupabaseStorage {
+	cfg := aws.Config{
+		Region: "ap-southeast-1",
+		Credentials: credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, ""),
+		EndpointResolverWithOptions: aws.EndpointResolverWithOptionsFunc(
+			func(service, region string, options ...interface{}) (aws.Endpoint, error) {
+				return aws.Endpoint{URL: endpoint, HostnameImmutable: true}, nil
+			},
+		),
 	}
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.UsePathStyle = true
+	})
+	return &SupabaseStorage{client: client, bucket: bucket, publicBase: publicBase}
 }
 
-// Upload sends file bytes to Supabase Storage and returns the public URL.
+// Upload sends file bytes to S3-compatible storage and returns the public URL.
 func (s *SupabaseStorage) Upload(filename string, data []byte, contentType string) (string, error) {
-	url := fmt.Sprintf("%s/storage/v1/object/%s/%s", s.projectURL, bucket, filename)
-
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	_, err := s.client.PutObject(context.Background(), &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(filename),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String(contentType),
+	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("s3 upload failed: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+s.serviceKey)
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("x-upsert", "true")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("storage upload failed %d: %s", resp.StatusCode, body)
-	}
-
-	publicURL := fmt.Sprintf("%s/storage/v1/object/public/%s/%s", s.projectURL, bucket, filename)
-	return publicURL, nil
+	return s.PublicURL(filename), nil
 }
 
-// Delete removes a file from Supabase Storage by its filename (path within bucket).
+// Delete removes a file from S3-compatible storage.
 func (s *SupabaseStorage) Delete(filename string) error {
-	url := fmt.Sprintf("%s/storage/v1/object/%s/%s", s.projectURL, bucket, filename)
-
-	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	_, err := s.client.DeleteObject(context.Background(), &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(filename),
+	})
 	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+s.serviceKey)
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("storage delete failed %d: %s", resp.StatusCode, body)
+		return fmt.Errorf("s3 delete failed: %w", err)
 	}
 	return nil
 }
 
 // PublicURL constructs the public URL for a given filename.
 func (s *SupabaseStorage) PublicURL(filename string) string {
-	return fmt.Sprintf("%s/storage/v1/object/public/%s/%s", s.projectURL, bucket, filename)
+	return fmt.Sprintf("%s/%s/%s", s.publicBase, s.bucket, filename)
 }

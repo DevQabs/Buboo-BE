@@ -68,15 +68,18 @@ func main() {
 		diaryRepo    = repository.NewFileDiaryRepository(filepath.Join(dataDir, "diaries.json"))
 	}
 
-	// ── Supabase Storage ──────────────────────────────────────────────────────
+	// ── S3-compatible Storage ─────────────────────────────────────────────────
 	var stor *storage.SupabaseStorage
-	projectURL := envOr("SUPABASE_PROJECT_URL", os.Getenv("NEXT_PUBLIC_SUPABASE_URL"))
-	serviceKey := os.Getenv("SUPABASE_SERVICE_KEY")
-	if projectURL != "" && serviceKey != "" {
-		stor = storage.New(projectURL, serviceKey)
-		log.Println("✅ Supabase Storage 연결 성공")
+	s3Endpoint  := os.Getenv("S3_ENDPOINT")
+	s3AccessKey := os.Getenv("S3_ACCESS_KEY_ID")
+	s3SecretKey := os.Getenv("S3_SECRET_ACCESS_KEY")
+	s3Bucket    := envOr("S3_BUCKET", "diary-photos")
+	s3PublicBase := os.Getenv("S3_PUBLIC_BASE")
+	if s3Endpoint != "" && s3AccessKey != "" && s3SecretKey != "" {
+		stor = storage.New(s3Endpoint, s3AccessKey, s3SecretKey, s3Bucket, s3PublicBase)
+		log.Println("✅ S3 Storage 연결 성공")
 	} else {
-		log.Println("⚠️  Supabase Storage 미설정 — 로컬 파일 업로드 사용")
+		log.Println("⚠️  S3 Storage 미설정 — 로컬 파일 업로드 사용")
 	}
 
 	uploadsDir := filepath.Join(dataDir, "uploads")
