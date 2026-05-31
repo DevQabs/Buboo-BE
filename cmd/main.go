@@ -41,35 +41,21 @@ func main() {
 		catRepo      repository.CategoryRepository
 	)
 
-	if os.Getenv("DATABASE_URL") != "" {
-		pool, err := db.New(ctx)
-		if err != nil {
-			log.Fatalf("DB 연결 실패: %v", err)
-		}
-		log.Println("✅ PostgreSQL 연결 성공")
-		txRepo       = repository.NewPgTransactionRepository(pool)
-		stockRepo    = repository.NewPgStockRepository(pool)
-		userRepo     = repository.NewPgUserRepository(pool)
-		assetRepo    = repository.NewPgOtherAssetRepository(pool)
-		stxRepo      = repository.NewPgStockTransactionRepository(pool)
-		feRepo       = repository.NewPgFixedExpenseRepository(pool)
-		divRepo      = repository.NewPgDividendRepository(pool)
-		scheduleRepo = repository.NewPgScheduleRepository(pool)
-		diaryRepo    = repository.NewPgDiaryRepository(pool)
-		catRepo      = repository.NewPgCategoryRepository(pool)
-	} else {
-		log.Println("⚠️  DATABASE_URL 미설정 — 파일 기반 저장소 사용")
-		txRepo       = repository.NewFileTransactionRepository(filepath.Join(dataDir, "transactions.json"))
-		stockRepo    = repository.NewFileStockRepository(filepath.Join(dataDir, "stocks.json"))
-		userRepo     = repository.NewFileUserRepository(filepath.Join(dataDir, "users.json"))
-		assetRepo    = repository.NewFileOtherAssetRepository(filepath.Join(dataDir, "other_assets.json"))
-		stxRepo      = repository.NewFileStockTransactionRepository(filepath.Join(dataDir, "stock_transactions.json"))
-		feRepo       = repository.NewFileFixedExpenseRepository(filepath.Join(dataDir, "fixed_expenses.json"))
-		divRepo      = repository.NewFileDividendRepository(filepath.Join(dataDir, "dividends.json"))
-		scheduleRepo = repository.NewFileScheduleRepository(filepath.Join(dataDir, "schedules.json"))
-		diaryRepo    = repository.NewFileDiaryRepository(filepath.Join(dataDir, "diaries.json"))
-		catRepo      = repository.NewFileCategoryRepository(filepath.Join(dataDir, "categories.json"))
+	pool, err := db.New(ctx)
+	if err != nil {
+		log.Fatalf("DB 연결 실패: %v", err)
 	}
+	log.Println("✅ PostgreSQL 연결 성공")
+	txRepo       = repository.NewPgTransactionRepository(pool)
+	stockRepo    = repository.NewPgStockRepository(pool)
+	userRepo     = repository.NewPgUserRepository(pool)
+	assetRepo    = repository.NewPgOtherAssetRepository(pool)
+	stxRepo      = repository.NewPgStockTransactionRepository(pool)
+	feRepo       = repository.NewPgFixedExpenseRepository(pool)
+	divRepo      = repository.NewPgDividendRepository(pool)
+	scheduleRepo = repository.NewPgScheduleRepository(pool)
+	diaryRepo    = repository.NewPgDiaryRepository(pool)
+	catRepo      = repository.NewPgCategoryRepository(pool)
 
 	// ── S3-compatible Storage ─────────────────────────────────────────────────
 	var stor *storage.SupabaseStorage
