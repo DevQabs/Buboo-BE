@@ -1609,6 +1609,23 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build role → userID map so owner (husband/wife) maps to actual user.
+	roleToUserID := make(map[string]string)
+	if users, uErr := h.userRepo.ListUsers(r.Context()); uErr == nil {
+		for _, u := range users {
+			roleToUserID[u.Role] = u.ID
+		}
+	}
+	resolveOwner := func(owner models.FixedExpenseOwner, fallback string) string {
+		if owner == models.FixedOwnerJoint {
+			return fallback
+		}
+		if id, ok := roleToUserID[string(owner)]; ok {
+			return id
+		}
+		return fallback
+	}
+
 	// Build set of already-applied IDs.
 	applied := make(map[string]bool)
 	for _, tx := range txns {
@@ -1640,7 +1657,7 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 		// Saving fixed expenses go through SavingService for atomic asset update.
 		if fe.Kind == models.FixedExpenseKindSaving && fe.SavingLink != nil {
 			created, err := h.savingSvc.ApplySaving(r.Context(), service.ApplySavingRequest{
-				UserID:         fe.UserID,
+				UserID:         resolveOwner(fe.Owner, fe.UserID),
 				AmountKRW:      fe.Amount,
 				Title:          fe.Title,
 				Memo:           fe.Memo,
@@ -1661,7 +1678,7 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 
 		tx := &models.Transaction{
 			CoupleID:       h.coupleID,
-			UserID:         fe.UserID,
+			UserID:         resolveOwner(fe.Owner, fe.UserID),
 			Type:           "expense",
 			Amount:         fe.Amount,
 			Currency:       fe.Currency,
