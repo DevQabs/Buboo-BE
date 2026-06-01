@@ -170,6 +170,7 @@ func (h *Handler) NewRouter() chi.Router {
 				r.Get("/", h.getAsset)          // 단건 조회
 				r.Put("/", h.updateAsset)       // 수정 (partial update)
 				r.Delete("/", h.deleteAsset)    // 삭제
+				r.Post("/loan-expense", h.createLoanFixedExpense) // 대출 → 고정비 생성
 			})
 		})
 
@@ -1252,6 +1253,63 @@ func (h *Handler) deleteAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// createLoanFixedExpense creates a monthly fixed expense for an existing loan asset.
+// POST /api/assets/{id}/loan-expense
+func (h *Handler) createLoanFixedExpense(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+
+	asset, err := h.assetRepo.GetByID(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusNotFound, fmt.Errorf("asset not found: %w", err))
+		return
+	}
+	if asset.AssetType != models.AssetTypeLoan {
+		respondError(w, http.StatusBadRequest, fmt.Errorf("asset is not a loan"))
+		return
+	}
+	if asset.PaymentDay == 0 {
+		respondError(w, http.StatusBadRequest, fmt.Errorf("loan has no payment_day set"))
+		return
+	}
+
+	monthly := calcLoanMonthlyPayment(asset.ValueKRW, asset.InterestRate, asset.LoanType, asset.MaturityDate)
+	if monthly == 0 {
+		respondError(w, http.StatusBadRequest, fmt.Errorf("cannot calculate monthly payment — check interest_rate and maturity_date"))
+		return
+	}
+
+	owner := models.FixedOwnerJoint
+	if u, err := h.userRepo.GetUser(ctx, asset.UserID); err == nil {
+		switch u.Role {
+		case "husband":
+			owner = models.FixedOwnerHusband
+		case "wife":
+			owner = models.FixedOwnerWife
+		}
+	}
+
+	fe := &models.FixedExpense{
+		CoupleID:   h.coupleID,
+		UserID:     asset.UserID,
+		Owner:      owner,
+		Kind:       models.FixedExpenseKindSpending,
+		Title:      asset.Name + " 납입금",
+		Category:   "대출상환",
+		Amount:     monthly,
+		Currency:   "KRW",
+		Cycle:      models.RecurringMonthly,
+		DayOfMonth: asset.PaymentDay,
+		Memo:       "대출 자산에서 자동 생성",
+	}
+	created, err := h.feRepo.Create(ctx, fe)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	respondJSON(w, http.StatusCreated, created)
 }
 
 // netWorth aggregates stock portfolio + other assets into a single KRW summary.
