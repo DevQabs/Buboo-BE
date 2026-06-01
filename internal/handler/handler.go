@@ -1281,6 +1281,16 @@ func (h *Handler) createLoanFixedExpense(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// 중복 방지: 동일 제목 고정비 이미 존재하면 409
+	expectedTitle := asset.Name + " 납입금"
+	existingFEs, _ := h.feRepo.ListByCouple(ctx, h.coupleID)
+	for _, fe := range existingFEs {
+		if fe.Title == expectedTitle {
+			respondError(w, http.StatusConflict, fmt.Errorf("fixed expense already exists: %q", expectedTitle))
+			return
+		}
+	}
+
 	owner := models.FixedOwnerJoint
 	if u, err := h.userRepo.GetUser(ctx, asset.UserID); err == nil {
 		switch u.Role {
