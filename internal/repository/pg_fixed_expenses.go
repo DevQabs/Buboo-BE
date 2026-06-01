@@ -91,9 +91,10 @@ func (r *PgFixedExpenseRepository) Create(ctx context.Context, fe *models.FixedE
 		fe.Currency = "KRW"
 	}
 
-	slJSON, _ := json.Marshal(fe.SavingLink)
-	if fe.SavingLink == nil {
-		slJSON = nil
+	var slParam interface{}
+	if fe.SavingLink != nil {
+		b, _ := json.Marshal(fe.SavingLink)
+		slParam = string(b)
 	}
 
 	_, err := r.db.Exec(ctx,
@@ -104,7 +105,7 @@ func (r *PgFixedExpenseRepository) Create(ctx context.Context, fe *models.FixedE
 		fe.ID, fe.CoupleID, fe.UserID, string(fe.Owner), string(fe.Kind),
 		fe.Title, fe.Category, fe.Amount, fe.Currency,
 		string(fe.Cycle), fe.DayOfMonth, fe.DayOfWeek,
-		fe.IsActive, fe.Memo, slJSON, fe.CreatedAt, fe.UpdatedAt,
+		fe.IsActive, fe.Memo, slParam, fe.CreatedAt, fe.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create fixed expense: %w", err)
@@ -115,9 +116,10 @@ func (r *PgFixedExpenseRepository) Create(ctx context.Context, fe *models.FixedE
 func (r *PgFixedExpenseRepository) Update(ctx context.Context, fe *models.FixedExpense) (*models.FixedExpense, error) {
 	fe.UpdatedAt = time.Now().UTC()
 
-	slJSON, _ := json.Marshal(fe.SavingLink)
-	if fe.SavingLink == nil {
-		slJSON = nil
+	var slParam interface{}
+	if fe.SavingLink != nil {
+		b, _ := json.Marshal(fe.SavingLink)
+		slParam = string(b)
 	}
 
 	tag, err := r.db.Exec(ctx,
@@ -128,7 +130,7 @@ func (r *PgFixedExpenseRepository) Update(ctx context.Context, fe *models.FixedE
 		 WHERE id=$1`,
 		fe.ID, string(fe.Owner), string(fe.Kind), fe.Title, fe.Category,
 		fe.Amount, string(fe.Cycle), fe.DayOfMonth, fe.DayOfWeek,
-		fe.IsActive, fe.Memo, slJSON, fe.UpdatedAt,
+		fe.IsActive, fe.Memo, slParam, fe.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err

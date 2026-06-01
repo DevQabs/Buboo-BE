@@ -372,7 +372,10 @@ func (h *Handler) calendarSummary(w http.ResponseWriter, r *http.Request) {
 		dayMap[dateKey].transactionCount++
 		switch tx.Type {
 		case "expense":
-			dayMap[dateKey].totalExpense += tx.Amount
+			// 고정비 트랜잭션은 캘린더 셀 지출 합계에서 제외 (dot으로 별도 표시됨).
+			if tx.FixedExpenseID == nil || *tx.FixedExpenseID == "" {
+				dayMap[dateKey].totalExpense += tx.Amount
+			}
 		case "income":
 			dayMap[dateKey].totalIncome += tx.Amount
 		}
@@ -390,12 +393,20 @@ func (h *Handler) calendarSummary(w http.ResponseWriter, r *http.Request) {
 	// Sort ascending by date for predictable ordering.
 	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
 
-	// ── 2. Fixed expense event dots (이체 예정일) ──────────────────────────────
+	// ── 2. Fixed expense event dots (이체 예정일, 미적용만 표시) ─────────────────
 	events := make([]models.CalendarEvent, 0)
+
+	// Build set of fixed expense IDs already applied this month.
+	appliedFEIDs := make(map[string]bool)
+	for _, tx := range txns {
+		if tx.FixedExpenseID != nil && *tx.FixedExpenseID != "" {
+			appliedFEIDs[*tx.FixedExpenseID] = true
+		}
+	}
 
 	fes, _ := h.feRepo.ListByCouple(r.Context(), h.coupleID)
 	for _, fe := range fes {
-		if !fe.IsActive {
+		if !fe.IsActive || appliedFEIDs[fe.ID] {
 			continue
 		}
 		// Clamp day to 28 for months with fewer days.

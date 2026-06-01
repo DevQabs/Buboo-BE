@@ -109,13 +109,14 @@ func (r *PgTransactionRepository) Create(ctx context.Context, tx *models.Transac
 	tx.CreatedAt = now
 	tx.UpdatedAt = now
 
-	locJSON, _ := json.Marshal(tx.Location)
-	slJSON, _ := json.Marshal(tx.SavingLink)
-	if tx.Location == nil {
-		locJSON = nil
+	var locParam, slParam interface{}
+	if tx.Location != nil {
+		b, _ := json.Marshal(tx.Location)
+		locParam = string(b)
 	}
-	if tx.SavingLink == nil {
-		slJSON = nil
+	if tx.SavingLink != nil {
+		b, _ := json.Marshal(tx.SavingLink)
+		slParam = string(b)
 	}
 	if tx.Tags == nil {
 		tx.Tags = []string{}
@@ -129,8 +130,8 @@ func (r *PgTransactionRepository) Create(ctx context.Context, tx *models.Transac
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
 		tx.ID, tx.CoupleID, tx.UserID, tx.Type, tx.Amount, tx.Currency,
 		tx.Category, tx.Subcategory, tx.Title, tx.Memo, tx.Date,
-		tx.PaymentMethod, tx.IsFixed, tx.Tags, locJSON,
-		tx.FixedExpenseID, slJSON, tx.CreatedAt, tx.UpdatedAt,
+		tx.PaymentMethod, tx.IsFixed, tx.Tags, locParam,
+		tx.FixedExpenseID, slParam, tx.CreatedAt, tx.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create transaction: %w", err)
@@ -141,13 +142,14 @@ func (r *PgTransactionRepository) Create(ctx context.Context, tx *models.Transac
 func (r *PgTransactionRepository) Update(ctx context.Context, tx *models.Transaction) (*models.Transaction, error) {
 	tx.UpdatedAt = time.Now().UTC()
 
-	locJSON, _ := json.Marshal(tx.Location)
-	slJSON, _ := json.Marshal(tx.SavingLink)
-	if tx.Location == nil {
-		locJSON = nil
+	var locParam, slParam interface{}
+	if tx.Location != nil {
+		b, _ := json.Marshal(tx.Location)
+		locParam = string(b)
 	}
-	if tx.SavingLink == nil {
-		slJSON = nil
+	if tx.SavingLink != nil {
+		b, _ := json.Marshal(tx.SavingLink)
+		slParam = string(b)
 	}
 	if tx.Tags == nil {
 		tx.Tags = []string{}
@@ -161,7 +163,7 @@ func (r *PgTransactionRepository) Update(ctx context.Context, tx *models.Transac
 		 WHERE id=$1`,
 		tx.ID, tx.UserID, tx.Type, tx.Amount, tx.Currency, tx.Category, tx.Subcategory,
 		tx.Title, tx.Memo, tx.Date, tx.PaymentMethod, tx.IsFixed,
-		tx.Tags, locJSON, tx.FixedExpenseID, slJSON, tx.UpdatedAt,
+		tx.Tags, locParam, tx.FixedExpenseID, slParam, tx.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
