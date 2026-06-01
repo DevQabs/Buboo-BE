@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path"
@@ -973,6 +974,29 @@ func (h *Handler) refreshPrices(w http.ResponseWriter, r *http.Request) {
 //  Other Asset handlers  (/api/assets)
 // ─────────────────────────────────────────────
 
+// calcLoanMonthlyPayment mirrors the frontend calcLoanPayment logic.
+func calcLoanMonthlyPayment(balanceKRW int64, interestRate *float64, loanType string, maturityDate *time.Time) int64 {
+	if balanceKRW == 0 || interestRate == nil || maturityDate == nil {
+		return 0
+	}
+	r := *interestRate / 100.0 / 12.0
+	remaining := math.Max(1, math.Round(maturityDate.Sub(time.Now()).Hours()/24/30.44))
+	n := int(remaining)
+	switch loanType {
+	case "만기일시상환":
+		return int64(math.Round(float64(balanceKRW) * r))
+	case "원리금균등상환":
+		if r == 0 {
+			return balanceKRW / int64(n)
+		}
+		factor := math.Pow(1+r, float64(n))
+		return int64(math.Round(float64(balanceKRW) * r * factor / (factor - 1)))
+	case "원금균등상환":
+		return int64(math.Round(float64(balanceKRW)/float64(n) + float64(balanceKRW)*r))
+	}
+	return 0
+}
+
 // applyUSDCashRate rewrites ValueKRW for USD cash assets using the live rate.
 func applyUSDCashRate(assets []models.OtherAsset, usdKRW float64) {
 	for i := range assets {
@@ -1088,6 +1112,37 @@ func (h *Handler) createAsset(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	// 대출 자산 등록 시 고정비 자동 생성
+	if created.AssetType == models.AssetTypeLoan && created.PaymentDay > 0 {
+		monthly := calcLoanMonthlyPayment(created.ValueKRW, created.InterestRate, created.LoanType, created.MaturityDate)
+		if monthly > 0 {
+			owner := models.FixedOwnerJoint
+			if u, err := h.userRepo.GetUser(r.Context(), created.UserID); err == nil {
+				switch u.Role {
+				case "husband":
+					owner = models.FixedOwnerHusband
+				case "wife":
+					owner = models.FixedOwnerWife
+				}
+			}
+			fe := &models.FixedExpense{
+				CoupleID:   h.coupleID,
+				UserID:     created.UserID,
+				Owner:      owner,
+				Kind:       models.FixedExpenseKindSpending,
+				Title:      created.Name + " 납입금",
+				Category:   "대출상환",
+				Amount:     monthly,
+				Currency:   "KRW",
+				Cycle:      models.RecurringMonthly,
+				DayOfMonth: created.PaymentDay,
+				Memo:       "대출 자산 등록 시 자동 생성",
+			}
+			_, _ = h.feRepo.Create(r.Context(), fe)
+		}
+	}
+
 	respondJSON(w, http.StatusCreated, created)
 }
 

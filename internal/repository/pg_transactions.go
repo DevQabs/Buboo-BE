@@ -155,11 +155,11 @@ func (r *PgTransactionRepository) Update(ctx context.Context, tx *models.Transac
 
 	tag, err := r.db.Exec(ctx,
 		`UPDATE transactions SET
-		 type=$2, amount=$3, currency=$4, category=$5, subcategory=$6,
-		 title=$7, memo=$8, date=$9, payment_method=$10, is_fixed=$11,
-		 tags=$12, location=$13, fixed_expense_id=$14, saving_link=$15, updated_at=$16
+		 user_id=$2, type=$3, amount=$4, currency=$5, category=$6, subcategory=$7,
+		 title=$8, memo=$9, date=$10, payment_method=$11, is_fixed=$12,
+		 tags=$13, location=$14, fixed_expense_id=$15, saving_link=$16, updated_at=$17
 		 WHERE id=$1`,
-		tx.ID, tx.Type, tx.Amount, tx.Currency, tx.Category, tx.Subcategory,
+		tx.ID, tx.UserID, tx.Type, tx.Amount, tx.Currency, tx.Category, tx.Subcategory,
 		tx.Title, tx.Memo, tx.Date, tx.PaymentMethod, tx.IsFixed,
 		tx.Tags, locJSON, tx.FixedExpenseID, slJSON, tx.UpdatedAt,
 	)
