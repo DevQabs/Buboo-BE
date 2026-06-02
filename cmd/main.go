@@ -20,6 +20,7 @@ import (
 )
 
 func main() {
+	loadDotEnv()
 	port     := envOr("PORT", "8090")
 	dataDir  := envOr("DATA_DIR", "./data")
 	coupleID := envOr("COUPLE_ID", "couple-001")
@@ -118,6 +119,28 @@ func main() {
 		log.Fatalf("강제 종료: %v", err)
 	}
 	log.Println("서버 정상 종료")
+}
+
+func loadDotEnv() {
+	data, err := os.ReadFile(".env")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if os.Getenv(k) == "" {
+			os.Setenv(k, v)
+		}
+	}
 }
 
 func envOr(key, fallback string) string {

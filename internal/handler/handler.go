@@ -372,10 +372,7 @@ func (h *Handler) calendarSummary(w http.ResponseWriter, r *http.Request) {
 		dayMap[dateKey].transactionCount++
 		switch tx.Type {
 		case "expense":
-			// 고정비 트랜잭션은 캘린더 셀 지출 합계에서 제외 (dot으로 별도 표시됨).
-			if tx.FixedExpenseID == nil || *tx.FixedExpenseID == "" {
-				dayMap[dateKey].totalExpense += tx.Amount
-			}
+			dayMap[dateKey].totalExpense += tx.Amount
 		case "income":
 			dayMap[dateKey].totalIncome += tx.Amount
 		}
