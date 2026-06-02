@@ -390,20 +390,12 @@ func (h *Handler) calendarSummary(w http.ResponseWriter, r *http.Request) {
 	// Sort ascending by date for predictable ordering.
 	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
 
-	// ── 2. Fixed expense event dots (이체 예정일, 미적용만 표시) ─────────────────
+	// ── 2. Fixed expense event dots (이체 예정일, 모두 표시) ─────────────────────
 	events := make([]models.CalendarEvent, 0)
-
-	// Build set of fixed expense IDs already applied this month.
-	appliedFEIDs := make(map[string]bool)
-	for _, tx := range txns {
-		if tx.FixedExpenseID != nil && *tx.FixedExpenseID != "" {
-			appliedFEIDs[*tx.FixedExpenseID] = true
-		}
-	}
 
 	fes, _ := h.feRepo.ListByCouple(r.Context(), h.coupleID)
 	for _, fe := range fes {
-		if !fe.IsActive || appliedFEIDs[fe.ID] {
+		if !fe.IsActive {
 			continue
 		}
 		// Clamp day to 28 for months with fewer days.

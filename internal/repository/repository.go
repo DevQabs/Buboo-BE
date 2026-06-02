@@ -33,6 +33,9 @@ type TransactionRepository interface {
 	// ListByUser returns transactions created by a specific user.
 	ListByUser(ctx context.Context, coupleID, userID string) ([]models.Transaction, error)
 
+	// ListByDateRange returns transactions for a couple in an arbitrary date range [start, end).
+	ListByDateRange(ctx context.Context, coupleID string, start, end time.Time) ([]models.Transaction, error)
+
 	// Create persists a new transaction and returns the saved entity.
 	Create(ctx context.Context, tx *models.Transaction) (*models.Transaction, error)
 

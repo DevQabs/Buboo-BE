@@ -103,6 +103,18 @@ func (r *PgTransactionRepository) ListByUser(ctx context.Context, coupleID, user
 	return collectTxRows(rows)
 }
 
+func (r *PgTransactionRepository) ListByDateRange(ctx context.Context, coupleID string, start, end time.Time) ([]models.Transaction, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT `+txSelectCols+` FROM transactions
+		 WHERE couple_id = $1 AND date >= $2 AND date < $3
+		 ORDER BY date DESC`, coupleID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectTxRows(rows)
+}
+
 func (r *PgTransactionRepository) Create(ctx context.Context, tx *models.Transaction) (*models.Transaction, error) {
 	tx.ID = "txn-" + uuid.NewString()
 	now := time.Now().UTC()
