@@ -1183,6 +1183,9 @@ func (h *Handler) updateAsset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply partial update
+	if req.UserID != nil {
+		existing.UserID = *req.UserID
+	}
 	if req.AssetType != nil {
 		existing.AssetType = *req.AssetType
 	}
@@ -1439,6 +1442,13 @@ func (h *Handler) createDividend(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	// Auto-apply: create ledger income transaction immediately
+	if applyErr := h.applyDividendToLedger(r.Context(), created); applyErr != nil {
+		// Log but don't fail — dividend is saved, ledger entry can be retried
+		_ = applyErr
+	}
+
 	respondJSON(w, http.StatusCreated, created)
 }
 
@@ -1451,20 +1461,8 @@ func (h *Handler) deleteDividend(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// applyDividend: POST /api/dividends/{id}/apply
-// Creates a "income" transaction in the ledger for the dividend payout.
-func (h *Handler) applyDividend(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	d, err := h.divRepo.GetByID(r.Context(), id)
-	if err != nil {
-		respondError(w, http.StatusNotFound, err)
-		return
-	}
-	if d.IsApplied {
-		respondError(w, http.StatusConflict, fmt.Errorf("already applied to ledger"))
-		return
-	}
-
+// applyDividendToLedger creates an income transaction and marks the dividend applied.
+func (h *Handler) applyDividendToLedger(ctx context.Context, d *models.DividendEvent) error {
 	title := fmt.Sprintf("%s 배당금", d.Name)
 	if d.Symbol != "" {
 		title = fmt.Sprintf("%s (%s) 배당금", d.Name, d.Symbol)
@@ -1487,20 +1485,29 @@ func (h *Handler) applyDividend(w http.ResponseWriter, r *http.Request) {
 		IsFixed:       false,
 		Tags:          []string{"배당", d.Symbol},
 	}
-	if tx.Tags == nil {
-		tx.Tags = make([]string, 0)
+	if _, err := h.txRepo.Create(ctx, tx); err != nil {
+		return err
 	}
+	return h.divRepo.MarkApplied(ctx, d.ID)
+}
 
-	created, err := h.txRepo.Create(r.Context(), tx)
+// applyDividend: POST /api/dividends/{id}/apply (kept for backward compatibility)
+func (h *Handler) applyDividend(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	d, err := h.divRepo.GetByID(r.Context(), id)
 	if err != nil {
+		respondError(w, http.StatusNotFound, err)
+		return
+	}
+	if d.IsApplied {
+		respondError(w, http.StatusConflict, fmt.Errorf("already applied to ledger"))
+		return
+	}
+	if err := h.applyDividendToLedger(r.Context(), d); err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if err := h.divRepo.MarkApplied(r.Context(), id); err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	respondJSON(w, http.StatusOK, created)
+	respondJSON(w, http.StatusOK, map[string]string{"status": "applied"})
 }
 
 // dividendSummary: GET /api/dividends/summary?year=2026

@@ -464,6 +464,7 @@ type CreateOtherAssetRequest struct {
 // UpdateOtherAssetRequest is the DTO for PUT /api/assets/{id}.
 // 모든 필드 optional — 전달된 필드만 덮어씀 (partial update).
 type UpdateOtherAssetRequest struct {
+	UserID       *string         `json:"user_id"`
 	AssetType    *OtherAssetType `json:"asset_type"`
 	Name         *string         `json:"name"`
 	Description  *string         `json:"description"`

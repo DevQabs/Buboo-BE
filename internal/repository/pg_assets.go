@@ -143,12 +143,12 @@ func (r *PgOtherAssetRepository) Update(ctx context.Context, asset *models.Other
 
 	tag, err := r.db.Exec(ctx,
 		`UPDATE other_assets SET
-		 asset_type=$2, name=$3, description=$4, value_krw=$5, value_usd=$6, cost_krw=$7,
-		 currency=$8, is_liability=$9, is_locked=$10, location=$11,
-		 maturity_date=$12, interest_rate=$13,
-		 loan_type=$14, payment_day=$15, memo=$16, updated_at=$17
+		 user_id=$2, asset_type=$3, name=$4, description=$5, value_krw=$6, value_usd=$7, cost_krw=$8,
+		 currency=$9, is_liability=$10, is_locked=$11, location=$12,
+		 maturity_date=$13, interest_rate=$14,
+		 loan_type=$15, payment_day=$16, memo=$17, updated_at=$18
 		 WHERE id=$1`,
-		asset.ID, string(asset.AssetType), asset.Name, asset.Description,
+		asset.ID, asset.UserID, string(asset.AssetType), asset.Name, asset.Description,
 		asset.ValueKRW, asset.ValueUSD, asset.CostKRW,
 		asset.Currency, asset.IsLiability, asset.IsLocked, locJSON,
 		asset.MaturityDate, asset.InterestRate,

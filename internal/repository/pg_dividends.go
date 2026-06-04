@@ -83,7 +83,6 @@ func (r *PgDividendRepository) ListByYear(ctx context.Context, coupleID string, 
 func (r *PgDividendRepository) Create(ctx context.Context, d *models.DividendEvent) (*models.DividendEvent, error) {
 	d.ID = "div-" + uuid.NewString()
 	now := time.Now().UTC()
-	d.IsApplied = false
 	d.CreatedAt = now
 	d.UpdatedAt = now
 
