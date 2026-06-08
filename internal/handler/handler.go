@@ -374,7 +374,17 @@ func (h *Handler) calendarSummary(w http.ResponseWriter, r *http.Request) {
 		case "expense":
 			dayMap[dateKey].totalExpense += tx.Amount
 		case "income":
-			dayMap[dateKey].totalIncome += tx.Amount
+			// 배당 태그 income은 dividend event로 별도 표시 — total_income 제외
+			isDividend := false
+			for _, tag := range tx.Tags {
+				if tag == "배당" {
+					isDividend = true
+					break
+				}
+			}
+			if !isDividend {
+				dayMap[dateKey].totalIncome += tx.Amount
+			}
 		}
 	}
 
