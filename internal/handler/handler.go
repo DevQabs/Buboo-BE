@@ -1732,8 +1732,13 @@ func (h *Handler) fixedExpenseSummary(w http.ResponseWriter, r *http.Request) {
 	var unapplied []models.FixedExpense
 	appliedCount := 0
 
+	// Only count fixed expenses that existed by the end of the viewed month.
+	endOfMonth := time.Date(year, time.Month(month+1), 1, 0, 0, 0, 0, time.UTC)
 	for _, fe := range fes {
 		if !fe.IsActive {
+			continue
+		}
+		if !fe.CreatedAt.Before(endOfMonth) {
 			continue
 		}
 		totalAmount += fe.Amount
