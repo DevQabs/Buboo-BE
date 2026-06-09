@@ -231,6 +231,24 @@ func (h *Handler) NewRouter() chi.Router {
 // ─────────────────────────────────────────────
 
 func (h *Handler) listTransactions(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	yearStr, monthStr := q.Get("year"), q.Get("month")
+	if yearStr != "" && monthStr != "" {
+		year, errY := strconv.Atoi(yearStr)
+		month, errM := strconv.Atoi(monthStr)
+		if errY == nil && errM == nil {
+			txns, err := h.txRepo.ListByMonth(r.Context(), h.coupleID, year, month)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if txns == nil {
+				txns = make([]models.Transaction, 0)
+			}
+			respondJSON(w, http.StatusOK, txns)
+			return
+		}
+	}
 	txns, err := h.txRepo.ListByCouple(r.Context(), h.coupleID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
@@ -1520,10 +1538,11 @@ func (h *Handler) applyDividend(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "applied"})
 }
 
-// dividendSummary: GET /api/dividends/summary?year=2026
+// dividendSummary: GET /api/dividends/summary?year=2026&month=6
 func (h *Handler) dividendSummary(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
 	year := time.Now().Year()
-	if y := r.URL.Query().Get("year"); y != "" {
+	if y := q.Get("year"); y != "" {
 		if v, err := strconv.Atoi(y); err == nil {
 			year = v
 		}
@@ -1536,6 +1555,19 @@ func (h *Handler) dividendSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	if events == nil {
 		events = make([]models.DividendEvent, 0)
+	}
+
+	// Filter by month if provided.
+	if m := q.Get("month"); m != "" {
+		if month, err := strconv.Atoi(m); err == nil {
+			filtered := events[:0]
+			for _, e := range events {
+				if int(e.PaymentDate.Month()) == month {
+					filtered = append(filtered, e)
+				}
+			}
+			events = filtered
+		}
 	}
 
 	var totalUSD, totalAfterTaxUSD float64
