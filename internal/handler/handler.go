@@ -1674,7 +1674,16 @@ func (h *Handler) updateFixedExpense(w http.ResponseWriter, r *http.Request) {
 	if req.Category != nil   { existing.Category = *req.Category }
 	if req.Amount != nil     { existing.Amount = *req.Amount }
 	if req.DayOfMonth != nil { existing.DayOfMonth = *req.DayOfMonth }
-	if req.IsActive != nil   { existing.IsActive = *req.IsActive }
+	if req.IsActive != nil {
+		wasActive := existing.IsActive
+		existing.IsActive = *req.IsActive
+		if wasActive && !*req.IsActive {
+			now := time.Now().UTC()
+			existing.DeactivatedAt = &now
+		} else if !wasActive && *req.IsActive {
+			existing.DeactivatedAt = nil
+		}
+	}
 	if req.Memo != nil       { existing.Memo = *req.Memo }
 	if req.SavingLink != nil { existing.SavingLink = req.SavingLink }
 
@@ -1732,13 +1741,19 @@ func (h *Handler) fixedExpenseSummary(w http.ResponseWriter, r *http.Request) {
 	var unapplied []models.FixedExpense
 	appliedCount := 0
 
-	// Only count fixed expenses that existed by the end of the viewed month.
+	startOfMonth := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	endOfMonth := time.Date(year, time.Month(month+1), 1, 0, 0, 0, 0, time.UTC)
 	for _, fe := range fes {
-		if !fe.IsActive {
+		// Exclude items created after this month ended.
+		if !fe.CreatedAt.Before(endOfMonth) {
 			continue
 		}
-		if !fe.CreatedAt.Before(endOfMonth) {
+		// Exclude inactive items with no deactivation date (legacy data).
+		if !fe.IsActive && fe.DeactivatedAt == nil {
+			continue
+		}
+		// Exclude items deactivated before this month started.
+		if fe.DeactivatedAt != nil && fe.DeactivatedAt.Before(startOfMonth) {
 			continue
 		}
 		totalAmount += fe.Amount

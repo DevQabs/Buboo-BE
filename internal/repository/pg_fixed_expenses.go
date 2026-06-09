@@ -22,22 +22,24 @@ func NewPgFixedExpenseRepository(db *pgxpool.Pool) *PgFixedExpenseRepository {
 
 const feCols = `id, couple_id, user_id, owner, kind, title, category,
 	amount, currency, cycle, day_of_month, day_of_week,
-	is_active, memo, saving_link, created_at, updated_at`
+	is_active, memo, saving_link, created_at, updated_at, deactivated_at`
 
 func scanFE(row interface{ Scan(dest ...any) error }) (*models.FixedExpense, error) {
 	var fe models.FixedExpense
 	var slJSON []byte
 	var dayOfWeek pgtype.Int4
+	var deactivatedAt *time.Time
 
 	if err := row.Scan(
 		&fe.ID, &fe.CoupleID, &fe.UserID, &fe.Owner, &fe.Kind,
 		&fe.Title, &fe.Category, &fe.Amount, &fe.Currency,
 		&fe.Cycle, &fe.DayOfMonth, &dayOfWeek,
 		&fe.IsActive, &fe.Memo, &slJSON,
-		&fe.CreatedAt, &fe.UpdatedAt,
+		&fe.CreatedAt, &fe.UpdatedAt, &deactivatedAt,
 	); err != nil {
 		return nil, err
 	}
+	fe.DeactivatedAt = deactivatedAt
 	if dayOfWeek.Valid {
 		v := int(dayOfWeek.Int32)
 		fe.DayOfWeek = &v
@@ -126,11 +128,11 @@ func (r *PgFixedExpenseRepository) Update(ctx context.Context, fe *models.FixedE
 		`UPDATE fixed_expenses SET
 		 owner=$2, kind=$3, title=$4, category=$5, amount=$6,
 		 cycle=$7, day_of_month=$8, day_of_week=$9, is_active=$10,
-		 memo=$11, saving_link=$12, updated_at=$13
+		 memo=$11, saving_link=$12, updated_at=$13, deactivated_at=$14
 		 WHERE id=$1`,
 		fe.ID, string(fe.Owner), string(fe.Kind), fe.Title, fe.Category,
 		fe.Amount, string(fe.Cycle), fe.DayOfMonth, fe.DayOfWeek,
-		fe.IsActive, fe.Memo, slParam, fe.UpdatedAt,
+		fe.IsActive, fe.Memo, slParam, fe.UpdatedAt, fe.DeactivatedAt,
 	)
 	if err != nil {
 		return nil, err

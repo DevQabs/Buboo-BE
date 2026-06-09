@@ -631,11 +631,12 @@ type FixedExpense struct {
 	Cycle      RecurringCycle    `json:"cycle"`             // "monthly" | "weekly"
 	DayOfMonth int               `json:"day_of_month"`      // 1–28, 매월 N일 이체 (cycle=monthly)
 	DayOfWeek  *int              `json:"day_of_week,omitempty"` // 0=Sun…6=Sat (cycle=weekly)
-	IsActive   bool              `json:"is_active"`
-	Memo       string            `json:"memo"`
-	SavingLink *SavingLink       `json:"saving_link,omitempty"` // non-nil when kind=="saving"
-	CreatedAt  time.Time         `json:"created_at"`
-	UpdatedAt  time.Time         `json:"updated_at"`
+	IsActive      bool       `json:"is_active"`
+	DeactivatedAt *time.Time `json:"deactivated_at,omitempty"` // set when is_active → false
+	Memo          string     `json:"memo"`
+	SavingLink    *SavingLink `json:"saving_link,omitempty"` // non-nil when kind=="saving"
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 // FixedExpensesFile mirrors the top-level structure of fixed_expenses.json.
