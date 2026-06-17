@@ -151,6 +151,7 @@ func (h *Handler) NewRouter() chi.Router {
 			r.Get("/exchange-rate", h.exchangeRate)
 			r.Post("/refresh", h.refreshPrices)
 			r.Get("/tax", h.annualTax)           // GET /api/stocks/tax?year=2026
+			r.Get("/transactions", h.listStockTransactions) // GET /api/stocks/transactions
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.getStock)
 				r.Put("/", h.updateStock)
@@ -872,6 +873,17 @@ func (h *Handler) annualTax(w http.ResponseWriter, r *http.Request) {
 		BySymbol:         bySymbol,
 	}
 	respondJSON(w, http.StatusOK, summary)
+}
+
+// listStockTransactions — GET /api/stocks/transactions
+// Returns all buy/sell transactions for the couple, newest first.
+func (h *Handler) listStockTransactions(w http.ResponseWriter, r *http.Request) {
+	txns, err := h.stxRepo.ListByCouple(r.Context(), h.coupleID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, txns)
 }
 
 // portfolio returns all stock assets with live prices, KRW conversion, and a summary.
