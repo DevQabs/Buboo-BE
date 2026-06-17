@@ -20,7 +20,7 @@ func NewPgStockTransactionRepository(db *pgxpool.Pool) *PgStockTransactionReposi
 
 const stxCols = `id, couple_id, user_id, stock_asset_id, symbol, exchange, name,
 	type, quantity, price, currency, avg_price_at_tx, realized_pnl,
-	memo, executed_at, created_at`
+	memo, executed_at, created_at, exchange_rate_at_tx`
 
 func scanSTx(row interface{ Scan(dest ...any) error }) (*models.StockTransaction, error) {
 	var t models.StockTransaction
@@ -29,7 +29,7 @@ func scanSTx(row interface{ Scan(dest ...any) error }) (*models.StockTransaction
 		&t.Symbol, &t.Exchange, &t.Name,
 		&t.Type, &t.Quantity, &t.Price, &t.Currency,
 		&t.AvgPriceAtTx, &t.RealizedPnL,
-		&t.Memo, &t.ExecutedAt, &t.CreatedAt,
+		&t.Memo, &t.ExecutedAt, &t.CreatedAt, &t.ExchangeRateAtTx,
 	); err != nil {
 		return nil, err
 	}
@@ -48,13 +48,13 @@ func (r *PgStockTransactionRepository) Create(ctx context.Context, tx *models.St
 		`INSERT INTO stock_transactions
 		 (id, couple_id, user_id, stock_asset_id, symbol, exchange, name,
 		  type, quantity, price, currency, avg_price_at_tx, realized_pnl,
-		  memo, executed_at, created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		  memo, executed_at, created_at, exchange_rate_at_tx)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
 		tx.ID, tx.CoupleID, tx.UserID, tx.StockAssetID,
 		tx.Symbol, tx.Exchange, tx.Name,
 		string(tx.Type), tx.Quantity, tx.Price, tx.Currency,
 		tx.AvgPriceAtTx, tx.RealizedPnL,
-		tx.Memo, tx.ExecutedAt, tx.CreatedAt,
+		tx.Memo, tx.ExecutedAt, tx.CreatedAt, tx.ExchangeRateAtTx,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create stock_transaction: %w", err)

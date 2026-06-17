@@ -703,8 +703,18 @@ func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 	// Weighted-average cost basis
 	newQty := asset.Quantity + req.Quantity
 	newAvg := (asset.Quantity*asset.AveragePrice + req.Quantity*req.Price) / newQty
+
+	// KRW weighted-average cost basis (uses exchange rate at time of purchase)
+	var newAvgKRW float64
+	if asset.Currency == "USD" && req.ExchangeRate > 0 {
+		newAvgKRW = (asset.Quantity*asset.AvgKRWPrice + req.Quantity*req.Price*req.ExchangeRate) / newQty
+	} else {
+		newAvgKRW = newAvg
+	}
+
 	asset.Quantity = newQty
 	asset.AveragePrice = newAvg
+	asset.AvgKRWPrice = newAvgKRW
 
 	updated, err := h.stockRepo.Update(ctx, asset)
 	if err != nil {
@@ -714,19 +724,20 @@ func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 
 	// Append immutable log
 	stx := &models.StockTransaction{
-		CoupleID:     h.coupleID,
-		UserID:       asset.UserID,
-		StockAssetID: asset.ID,
-		Symbol:       asset.Symbol,
-		Exchange:     asset.Exchange,
-		Name:         asset.Name,
-		Type:         models.StockTxBuy,
-		Quantity:     req.Quantity,
-		Price:        req.Price,
-		Currency:     asset.Currency,
-		AvgPriceAtTx: newAvg,
-		RealizedPnL:  0,
-		Memo:         req.Memo,
+		CoupleID:         h.coupleID,
+		UserID:           asset.UserID,
+		StockAssetID:     asset.ID,
+		Symbol:           asset.Symbol,
+		Exchange:         asset.Exchange,
+		Name:             asset.Name,
+		Type:             models.StockTxBuy,
+		Quantity:         req.Quantity,
+		Price:            req.Price,
+		Currency:         asset.Currency,
+		AvgPriceAtTx:     newAvg,
+		RealizedPnL:      0,
+		ExchangeRateAtTx: req.ExchangeRate,
+		Memo:             req.Memo,
 	}
 	if _, err := h.stxRepo.Create(ctx, stx); err != nil {
 		// Log failure is non-fatal for the user — asset is already updated
@@ -763,24 +774,31 @@ func (h *Handler) sellStock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Realized P&L = (sell_price - avg_cost) × quantity
-	realizedPnL := (req.Price - asset.AveragePrice) * req.Quantity
+	// Realized P&L always stored in KRW
+	var realizedPnL float64
+	if asset.Currency == "USD" && req.ExchangeRate > 0 && asset.AvgKRWPrice > 0 {
+		// (매도단가 × 환율 - KRW평균매입가) × 수량
+		realizedPnL = (req.Price*req.ExchangeRate - asset.AvgKRWPrice) * req.Quantity
+	} else {
+		realizedPnL = (req.Price - asset.AveragePrice) * req.Quantity
+	}
 
 	// Append immutable log BEFORE mutating state
 	stx := &models.StockTransaction{
-		CoupleID:     h.coupleID,
-		UserID:       asset.UserID,
-		StockAssetID: asset.ID,
-		Symbol:       asset.Symbol,
-		Exchange:     asset.Exchange,
-		Name:         asset.Name,
-		Type:         models.StockTxSell,
-		Quantity:     req.Quantity,
-		Price:        req.Price,
-		Currency:     asset.Currency,
-		AvgPriceAtTx: asset.AveragePrice,
-		RealizedPnL:  realizedPnL,
-		Memo:         req.Memo,
+		CoupleID:         h.coupleID,
+		UserID:           asset.UserID,
+		StockAssetID:     asset.ID,
+		Symbol:           asset.Symbol,
+		Exchange:         asset.Exchange,
+		Name:             asset.Name,
+		Type:             models.StockTxSell,
+		Quantity:         req.Quantity,
+		Price:            req.Price,
+		Currency:         asset.Currency,
+		AvgPriceAtTx:     asset.AveragePrice,
+		RealizedPnL:      realizedPnL,
+		ExchangeRateAtTx: req.ExchangeRate,
+		Memo:             req.Memo,
 	}
 	if _, err := h.stxRepo.Create(ctx, stx); err != nil {
 		fmt.Printf("warn: stx log failed: %v\n", err)

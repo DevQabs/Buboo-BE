@@ -231,7 +231,8 @@ type StockAsset struct {
 	Name         string    `json:"name"`         // 한글 종목명
 	NameEn       string    `json:"name_en"`      // 영문 종목명
 	Quantity     float64   `json:"quantity"`     // 보유 수량 (소수 허용: ETF 등)
-	AveragePrice float64   `json:"average_price"` // 평균 매입가
+	AveragePrice float64   `json:"average_price"` // 평균 매입가 (원화 통화)
+	AvgKRWPrice  float64   `json:"avg_krw_price"` // KRW 가중평균 매입가 (환율 반영)
 	Currency     string    `json:"currency"`     // 거래 통화
 	Sector       string    `json:"sector"`       // 섹터 분류
 	Memo         string    `json:"memo"`
@@ -328,22 +329,23 @@ const (
 // StockTransaction is an immutable record of a single buy or sell event.
 // It is NEVER updated or deleted — it is the audit log for tax calculation.
 type StockTransaction struct {
-	ID             string      `json:"id"`
-	CoupleID       string      `json:"couple_id"`
-	UserID         string      `json:"user_id"`
-	StockAssetID   string      `json:"stock_asset_id"` // "" if asset was later deleted
-	Symbol         string      `json:"symbol"`
-	Exchange       string      `json:"exchange"`
-	Name           string      `json:"name"`
-	Type           StockTxType `json:"type"`            // "buy" | "sell"
-	Quantity       float64     `json:"quantity"`
-	Price          float64     `json:"price"`           // per share, original currency
-	Currency       string      `json:"currency"`
-	AvgPriceAtTx   float64     `json:"avg_price_at_tx"` // avg cost basis at time of tx
-	RealizedPnL    float64     `json:"realized_pnl"`    // sell only: (price - avg) * qty; 0 for buy
-	Memo           string      `json:"memo"`
-	ExecutedAt     time.Time   `json:"executed_at"`
-	CreatedAt      time.Time   `json:"created_at"`
+	ID                string      `json:"id"`
+	CoupleID          string      `json:"couple_id"`
+	UserID            string      `json:"user_id"`
+	StockAssetID      string      `json:"stock_asset_id"` // "" if asset was later deleted
+	Symbol            string      `json:"symbol"`
+	Exchange          string      `json:"exchange"`
+	Name              string      `json:"name"`
+	Type              StockTxType `json:"type"`                 // "buy" | "sell"
+	Quantity          float64     `json:"quantity"`
+	Price             float64     `json:"price"`                // per share, original currency
+	Currency          string      `json:"currency"`
+	AvgPriceAtTx      float64     `json:"avg_price_at_tx"`      // avg cost basis at time of tx (original currency)
+	RealizedPnL       float64     `json:"realized_pnl"`         // sell only: always KRW
+	ExchangeRateAtTx  float64     `json:"exchange_rate_at_tx"`  // USD/KRW rate at time of tx; 0 = legacy data
+	Memo              string      `json:"memo"`
+	ExecutedAt        time.Time   `json:"executed_at"`
+	CreatedAt         time.Time   `json:"created_at"`
 }
 
 // StockTransactionsFile mirrors the top-level structure of stock_transactions.json.
@@ -353,16 +355,18 @@ type StockTransactionsFile struct {
 
 // BuyRequest is the DTO for POST /api/stocks/{id}/buy.
 type BuyRequest struct {
-	Quantity float64 `json:"quantity"`
-	Price    float64 `json:"price"`
-	Memo     string  `json:"memo"`
+	Quantity     float64 `json:"quantity"`
+	Price        float64 `json:"price"`
+	ExchangeRate float64 `json:"exchange_rate"` // USD/KRW rate at time of buy; 0 for KRW stocks
+	Memo         string  `json:"memo"`
 }
 
 // SellRequest is the DTO for POST /api/stocks/{id}/sell.
 type SellRequest struct {
-	Quantity float64 `json:"quantity"`
-	Price    float64 `json:"price"`
-	Memo     string  `json:"memo"`
+	Quantity     float64 `json:"quantity"`
+	Price        float64 `json:"price"`
+	ExchangeRate float64 `json:"exchange_rate"` // USD/KRW rate at time of sell; 0 for KRW stocks
+	Memo         string  `json:"memo"`
 }
 
 // TaxCheckResponse is returned by GET /api/stocks/{id}/tax-check.

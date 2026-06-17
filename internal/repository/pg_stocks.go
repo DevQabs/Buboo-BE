@@ -21,7 +21,7 @@ func NewPgStockRepository(db *pgxpool.Pool) *PgStockRepository {
 
 const stockCols = `id, couple_id, user_id, symbol, exchange, name, name_en,
 	quantity, average_price, currency, sector, memo, logo_url,
-	purchased_at, created_at, updated_at`
+	purchased_at, created_at, updated_at, avg_krw_price`
 
 func scanStock(row interface{ Scan(dest ...any) error }) (*models.StockAsset, error) {
 	var a models.StockAsset
@@ -30,7 +30,7 @@ func scanStock(row interface{ Scan(dest ...any) error }) (*models.StockAsset, er
 		&a.ID, &a.CoupleID, &a.UserID, &a.Symbol, &a.Exchange,
 		&a.Name, &a.NameEn, &a.Quantity, &a.AveragePrice,
 		&a.Currency, &a.Sector, &a.Memo, &logoURL,
-		&a.PurchasedAt, &a.CreatedAt, &a.UpdatedAt,
+		&a.PurchasedAt, &a.CreatedAt, &a.UpdatedAt, &a.AvgKRWPrice,
 	); err != nil {
 		return nil, err
 	}
@@ -81,12 +81,12 @@ func (r *PgStockRepository) Create(ctx context.Context, asset *models.StockAsset
 	_, err := r.db.Exec(ctx,
 		`INSERT INTO stock_assets
 		 (id, couple_id, user_id, symbol, exchange, name, name_en, quantity,
-		  average_price, currency, sector, memo, logo_url, purchased_at, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		  average_price, currency, sector, memo, logo_url, purchased_at, created_at, updated_at, avg_krw_price)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
 		asset.ID, asset.CoupleID, asset.UserID, asset.Symbol, asset.Exchange,
 		asset.Name, asset.NameEn, asset.Quantity, asset.AveragePrice,
 		asset.Currency, asset.Sector, asset.Memo, asset.LogoURL,
-		asset.PurchasedAt, asset.CreatedAt, asset.UpdatedAt,
+		asset.PurchasedAt, asset.CreatedAt, asset.UpdatedAt, asset.AvgKRWPrice,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create stock: %w", err)
@@ -99,10 +99,10 @@ func (r *PgStockRepository) Update(ctx context.Context, asset *models.StockAsset
 	tag, err := r.db.Exec(ctx,
 		`UPDATE stock_assets SET
 		 name=$2, name_en=$3, quantity=$4, average_price=$5,
-		 sector=$6, memo=$7, logo_url=$8, updated_at=$9
+		 sector=$6, memo=$7, logo_url=$8, updated_at=$9, avg_krw_price=$10
 		 WHERE id=$1`,
 		asset.ID, asset.Name, asset.NameEn, asset.Quantity, asset.AveragePrice,
-		asset.Sector, asset.Memo, asset.LogoURL, asset.UpdatedAt,
+		asset.Sector, asset.Memo, asset.LogoURL, asset.UpdatedAt, asset.AvgKRWPrice,
 	)
 	if err != nil {
 		return nil, err
