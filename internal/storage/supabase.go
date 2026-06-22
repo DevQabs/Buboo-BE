@@ -20,7 +20,7 @@ type SupabaseStorage struct {
 
 func New(endpoint, accessKeyID, secretAccessKey, bucket, publicBase string) *SupabaseStorage {
 	cfg := aws.Config{
-		Region: "ap-southeast-1",
+		Region: "ap-southeast-2",
 		Credentials: credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, ""),
 		EndpointResolverWithOptions: aws.EndpointResolverWithOptionsFunc(
 			func(service, region string, options ...interface{}) (aws.Endpoint, error) {
