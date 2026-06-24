@@ -231,6 +231,22 @@ type CategoryRepository interface {
 //  OtherAsset Repository
 // ─────────────────────────────────────────────
 
+// ─────────────────────────────────────────────
+//  Fridge Repository
+// ─────────────────────────────────────────────
+
+type FridgeRepository interface {
+	ListItems(ctx context.Context, coupleID string) ([]models.FridgeItem, error)
+	CreateItem(ctx context.Context, item *models.FridgeItem) (*models.FridgeItem, error)
+	UpdateItem(ctx context.Context, item *models.FridgeItem) (*models.FridgeItem, error)
+	DeleteItem(ctx context.Context, id string) error
+
+	ListDishes(ctx context.Context, coupleID string) ([]models.SideDish, error)
+	CreateDish(ctx context.Context, dish *models.SideDish) (*models.SideDish, error)
+	UpdateDish(ctx context.Context, dish *models.SideDish) (*models.SideDish, error)
+	DeleteDish(ctx context.Context, id string) error
+}
+
 // OtherAssetRepository abstracts persistence for non-stock assets
 // (real estate, deposits, crypto, vehicles, etc.).
 type OtherAssetRepository interface {

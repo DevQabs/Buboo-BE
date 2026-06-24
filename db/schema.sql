@@ -197,3 +197,40 @@ CREATE TABLE IF NOT EXISTS diaries (
     UNIQUE(couple_id, date)
 );
 CREATE INDEX IF NOT EXISTS idx_diaries_couple_date ON diaries(couple_id, date DESC);
+
+-- ─────────────────────────────────────────────
+--  Fridge Items (냉장고 식재료)
+-- ─────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS fridge_items (
+    id TEXT PRIMARY KEY,
+    couple_id TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    quantity TEXT NOT NULL DEFAULT '',
+    expiry_date TIMESTAMPTZ,
+    location TEXT NOT NULL DEFAULT '냉장',
+    category TEXT NOT NULL DEFAULT '기타',
+    memo TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_fridge_items_couple ON fridge_items(couple_id);
+CREATE INDEX IF NOT EXISTS idx_fridge_items_expiry ON fridge_items(couple_id, expiry_date);
+
+-- ─────────────────────────────────────────────
+--  Side Dishes (반찬)
+-- ─────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS side_dishes (
+    id TEXT PRIMARY KEY,
+    couple_id TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    made_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ,
+    location TEXT NOT NULL DEFAULT '냉장',
+    memo TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_side_dishes_couple ON side_dishes(couple_id);
+CREATE INDEX IF NOT EXISTS idx_side_dishes_expires ON side_dishes(couple_id, expires_at);

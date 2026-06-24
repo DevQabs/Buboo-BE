@@ -698,3 +698,70 @@ type Categories struct {
 	Expense []string `json:"expense"`
 	Income  []string `json:"income"`
 }
+
+// ─────────────────────────────────────────────
+//  FridgeItem (냉장고 식재료)
+// ─────────────────────────────────────────────
+
+type FridgeItem struct {
+	ID         string     `json:"id"`
+	CoupleID   string     `json:"couple_id"`
+	Name       string     `json:"name"`
+	Quantity   string     `json:"quantity"`    // "2개", "300g" etc.
+	ExpiryDate *time.Time `json:"expiry_date"` // nullable
+	Location   string     `json:"location"`    // "냉장" | "냉동" | "실온"
+	Category   string     `json:"category"`    // 채소/육류/해산물/유제품/가공식품/기타
+	Memo       string     `json:"memo"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+type CreateFridgeItemRequest struct {
+	Name       string  `json:"name"`
+	Quantity   string  `json:"quantity"`
+	ExpiryDate *string `json:"expiry_date"` // YYYY-MM-DD, nullable
+	Location   string  `json:"location"`
+	Category   string  `json:"category"`
+	Memo       string  `json:"memo"`
+}
+
+type UpdateFridgeItemRequest struct {
+	Name       *string `json:"name,omitempty"`
+	Quantity   *string `json:"quantity,omitempty"`
+	ExpiryDate *string `json:"expiry_date,omitempty"` // YYYY-MM-DD or "" to clear
+	Location   *string `json:"location,omitempty"`
+	Category   *string `json:"category,omitempty"`
+	Memo       *string `json:"memo,omitempty"`
+}
+
+// ─────────────────────────────────────────────
+//  SideDish (반찬)
+// ─────────────────────────────────────────────
+
+type SideDish struct {
+	ID        string     `json:"id"`
+	CoupleID  string     `json:"couple_id"`
+	Name      string     `json:"name"`
+	MadeAt    time.Time  `json:"made_at"`    // 제조일
+	ExpiresAt *time.Time `json:"expires_at"` // nullable 소비기한
+	Location  string     `json:"location"`   // "냉장" | "냉동"
+	Memo      string     `json:"memo"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+type CreateSideDishRequest struct {
+	Name      string  `json:"name"`
+	MadeAt    string  `json:"made_at"`    // YYYY-MM-DD
+	ExpiresAt *string `json:"expires_at"` // YYYY-MM-DD, nullable
+	Location  string  `json:"location"`
+	Memo      string  `json:"memo"`
+}
+
+type UpdateSideDishRequest struct {
+	Name      *string `json:"name,omitempty"`
+	MadeAt    *string `json:"made_at,omitempty"`
+	ExpiresAt *string `json:"expires_at,omitempty"` // YYYY-MM-DD or "" to clear
+	Location  *string `json:"location,omitempty"`
+	Memo      *string `json:"memo,omitempty"`
+}

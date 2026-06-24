@@ -40,6 +40,7 @@ func main() {
 		scheduleRepo repository.ScheduleRepository
 		diaryRepo    repository.DiaryRepository
 		catRepo      repository.CategoryRepository
+		fridgeRepo   repository.FridgeRepository
 	)
 
 	pool, err := db.New(ctx)
@@ -57,6 +58,7 @@ func main() {
 	scheduleRepo = repository.NewPgScheduleRepository(pool)
 	diaryRepo    = repository.NewPgDiaryRepository(pool)
 	catRepo      = repository.NewPgCategoryRepository(pool)
+	fridgeRepo   = repository.NewPgFridgeRepository(pool)
 
 	// ── S3-compatible Storage ─────────────────────────────────────────────────
 	var stor *storage.SupabaseStorage
@@ -86,7 +88,7 @@ func main() {
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := handler.New(
 		txRepo, stockRepo, stxRepo, userRepo, assetRepo,
-		feRepo, divRepo, scheduleRepo, diaryRepo, catRepo,
+		feRepo, divRepo, scheduleRepo, diaryRepo, catRepo, fridgeRepo,
 		priceSvc, savingSvc, coupleID, allowedOrigins, uploadsDir, stor,
 	).NewRouter()
 
