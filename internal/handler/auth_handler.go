@@ -19,6 +19,7 @@ type authCallbackRequest struct {
 	GoogleEmail string `json:"google_email"`
 	GoogleSub   string `json:"google_sub"`
 	InviteCode  string `json:"invite_code,omitempty"`
+	Nickname    string `json:"nickname,omitempty"`
 }
 
 func (h *Handler) authCallback(w http.ResponseWriter, r *http.Request) {
@@ -98,10 +99,14 @@ func (h *Handler) authCallback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		nickname := req.Nickname
+		if nickname == "" {
+			nickname = nameFromEmail(req.GoogleEmail)
+		}
 		newUser := &models.User{
 			ID:          uuid.New().String(),
 			CoupleID:    invite.CoupleID,
-			Name:        nameFromEmail(req.GoogleEmail),
+			Name:        nickname,
 			Email:       req.GoogleEmail,
 			GoogleSub:   req.GoogleSub,
 			Role:        role,
@@ -139,6 +144,7 @@ type authSetupRequest struct {
 	GoogleSub   string `json:"google_sub"`
 	CoupleName  string `json:"couple_name"`
 	Role        string `json:"role"` // "husband" | "wife"
+	Nickname    string `json:"nickname,omitempty"`
 }
 
 func (h *Handler) authSetup(w http.ResponseWriter, r *http.Request) {
@@ -176,10 +182,14 @@ func (h *Handler) authSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create user
+	setupNickname := req.Nickname
+	if setupNickname == "" {
+		setupNickname = nameFromEmail(req.GoogleEmail)
+	}
 	newUser := &models.User{
 		ID:          uuid.New().String(),
 		CoupleID:    createdCouple.ID,
-		Name:        nameFromEmail(req.GoogleEmail),
+		Name:        setupNickname,
 		Email:       req.GoogleEmail,
 		GoogleSub:   req.GoogleSub,
 		Role:        req.Role,
