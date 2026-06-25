@@ -93,15 +93,47 @@ type UserRepository interface {
 	// GetUser returns a user by ID.
 	GetUser(ctx context.Context, userID string) (*models.User, error)
 
-	// ListUsers returns all users.
-	ListUsers(ctx context.Context) ([]models.User, error)
+	// ListUsers returns all users for a couple.
+	ListUsers(ctx context.Context, coupleID string) ([]models.User, error)
 
-	// GetCouple returns the couple entity (MVP: there is only one couple).
+	// GetUserByGoogleSub looks up a user by Google OAuth sub (stable identifier).
+	// Returns nil, nil if not found.
+	GetUserByGoogleSub(ctx context.Context, sub string) (*models.User, error)
+
+	// GetUserByEmail looks up a user by email (migration fallback).
+	// Returns nil, nil if not found.
+	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
+
+	// CreateUser inserts a new user and returns the saved entity.
+	CreateUser(ctx context.Context, u *models.User) (*models.User, error)
+
+	// CreateCouple inserts a new couple and returns the saved entity.
+	CreateCouple(ctx context.Context, c *models.Couple) (*models.Couple, error)
+
+	// UpdateUserGoogleSub links a google_sub to an existing user.
+	UpdateUserGoogleSub(ctx context.Context, userID, sub string) error
+
+	// GetCouple returns the couple entity.
 	GetCouple(ctx context.Context, coupleID string) (*models.Couple, error)
 
 	// UpdateCouple updates mutable couple fields (monthly_budget, ledger_start_day).
-	// Both fields are always overwritten; callers should pass the current value for fields they do not intend to change.
 	UpdateCouple(ctx context.Context, coupleID string, monthlyBudget int64, ledgerStartDay int) (*models.Couple, error)
+}
+
+// InviteRepository manages couple invite codes.
+type InviteRepository interface {
+	// GetInviteByCode returns a valid (not expired, not used) invite.
+	// Returns nil, nil if not found or invalid.
+	GetInviteByCode(ctx context.Context, code string) (*models.Invite, error)
+
+	// CreateInvite generates a new invite for a couple.
+	CreateInvite(ctx context.Context, coupleID, createdBy string, role *string) (*models.Invite, error)
+
+	// MarkInviteUsed records when and by whom an invite was consumed.
+	MarkInviteUsed(ctx context.Context, inviteID, userID string) error
+
+	// ListInvitesByCouple returns all active (unused, non-expired) invites for a couple.
+	ListInvitesByCouple(ctx context.Context, coupleID string) ([]models.Invite, error)
 }
 
 // ─────────────────────────────────────────────

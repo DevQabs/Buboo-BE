@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
+	"github.com/yourname/couple-app/internal/auth"
 	"github.com/yourname/couple-app/internal/models"
 	"github.com/yourname/couple-app/internal/repository"
 	"github.com/yourname/couple-app/internal/service"
@@ -43,9 +44,10 @@ type Handler struct {
 	diaryRepo    repository.DiaryRepository
 	catRepo      repository.CategoryRepository
 	fridgeRepo   repository.FridgeRepository
+	inviteRepo   repository.InviteRepository
 	priceSvc     *service.PriceService
 	savingSvc    *service.SavingService
-	coupleID     string
+	jwtSecret    []byte
 	allowOrigins []string
 	uploadsDir   string
 	stor         *supstorage.SupabaseStorage
@@ -63,9 +65,10 @@ func New(
 	diaryRepo repository.DiaryRepository,
 	catRepo repository.CategoryRepository,
 	fridgeRepo repository.FridgeRepository,
+	inviteRepo repository.InviteRepository,
 	priceSvc *service.PriceService,
 	savingSvc *service.SavingService,
-	coupleID string,
+	jwtSecret []byte,
 	allowOrigins []string,
 	uploadsDir string,
 	stor *supstorage.SupabaseStorage,
@@ -82,9 +85,10 @@ func New(
 		diaryRepo:    diaryRepo,
 		catRepo:      catRepo,
 		fridgeRepo:   fridgeRepo,
+		inviteRepo:   inviteRepo,
 		priceSvc:     priceSvc,
 		savingSvc:    savingSvc,
-		coupleID:     coupleID,
+		jwtSecret:    jwtSecret,
 		allowOrigins: allowOrigins,
 		uploadsDir:   uploadsDir,
 		stor:         stor,
@@ -117,7 +121,21 @@ func (h *Handler) NewRouter() chi.Router {
 		w.WriteHeader(http.StatusOK)
 	})
 
+	// ── Public auth routes (no JWT required) ──────────────────────────────────
+	r.Route("/api/auth", func(r chi.Router) {
+		r.Post("/callback", h.authCallback)
+		r.Post("/setup", h.authSetup)
+		r.Get("/invite/{code}", h.getInviteByCode)
+	})
+
+	// ── Protected routes (JWT required) ───────────────────────────────────────
+	r.Group(func(r chi.Router) {
+		r.Use(auth.RequireAuth(h.jwtSecret))
+		r.Post("/api/auth/invite", h.createInvite)
+	})
+
 	r.Route("/api", func(r chi.Router) {
+		r.Use(auth.RequireAuth(h.jwtSecret))
 
 		// Users
 		r.Get("/users", h.listUsers)
@@ -257,7 +275,7 @@ func (h *Handler) listTransactions(w http.ResponseWriter, r *http.Request) {
 		year, errY := strconv.Atoi(yearStr)
 		month, errM := strconv.Atoi(monthStr)
 		if errY == nil && errM == nil {
-			txns, err := h.txRepo.ListByMonth(r.Context(), h.coupleID, year, month)
+			txns, err := h.txRepo.ListByMonth(r.Context(), auth.CoupleIDFromCtx(r.Context()), year, month)
 			if err != nil {
 				respondError(w, http.StatusInternalServerError, err)
 				return
@@ -269,7 +287,7 @@ func (h *Handler) listTransactions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	txns, err := h.txRepo.ListByCouple(r.Context(), h.coupleID)
+	txns, err := h.txRepo.ListByCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -295,6 +313,7 @@ func (h *Handler) createTransaction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		created, err := h.savingSvc.ApplySaving(r.Context(), service.ApplySavingRequest{
+			CoupleID:      auth.CoupleIDFromCtx(r.Context()),
 			UserID:        req.UserID,
 			AmountKRW:     req.Amount,
 			Title:         req.Title,
@@ -314,7 +333,7 @@ func (h *Handler) createTransaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tx := &models.Transaction{
-		CoupleID:      h.coupleID,
+		CoupleID:      auth.CoupleIDFromCtx(r.Context()),
 		UserID:        req.UserID,
 		Type:          req.Type,
 		Amount:        req.Amount,
@@ -390,7 +409,7 @@ func (h *Handler) calendarSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── 1. Aggregate transactions by date (GROUP BY equivalent) ──────────────
-	txns, err := h.txRepo.ListByMonth(r.Context(), h.coupleID, year, month)
+	txns, err := h.txRepo.ListByMonth(r.Context(), auth.CoupleIDFromCtx(r.Context()), year, month)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -441,7 +460,7 @@ func (h *Handler) calendarSummary(w http.ResponseWriter, r *http.Request) {
 	// ── 2. Fixed expense event dots (이체 예정일, 모두 표시) ─────────────────────
 	events := make([]models.CalendarEvent, 0)
 
-	fes, _ := h.feRepo.ListByCouple(r.Context(), h.coupleID)
+	fes, _ := h.feRepo.ListByCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	for _, fe := range fes {
 		if !fe.IsActive {
 			continue
@@ -461,7 +480,7 @@ func (h *Handler) calendarSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── 3. Dividend event dots (배당 지급일) ──────────────────────────────────
-	divs, _ := h.divRepo.ListByYear(r.Context(), h.coupleID, year)
+	divs, _ := h.divRepo.ListByYear(r.Context(), auth.CoupleIDFromCtx(r.Context()), year)
 	for _, d := range divs {
 		if int(d.PaymentDate.Month()) == month {
 			events = append(events, models.CalendarEvent{
@@ -496,12 +515,12 @@ func (h *Handler) monthlySummary(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, fmt.Errorf("invalid date format: use YYYY-MM-DD"))
 			return
 		}
-		summary, err := h.txRepo.SummaryByDateRange(r.Context(), h.coupleID, start, end)
+		summary, err := h.txRepo.SummaryByDateRange(r.Context(), auth.CoupleIDFromCtx(r.Context()), start, end)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err)
 			return
 		}
-		if couple, err2 := h.userRepo.GetCouple(r.Context(), h.coupleID); err2 == nil {
+		if couple, err2 := h.userRepo.GetCouple(r.Context(), auth.CoupleIDFromCtx(r.Context())); err2 == nil {
 			summary.BudgetLimit = couple.MonthlyBudget
 		}
 		respondJSON(w, http.StatusOK, summary)
@@ -517,12 +536,12 @@ func (h *Handler) monthlySummary(w http.ResponseWriter, r *http.Request) {
 	if month == 0 {
 		month = int(now.Month())
 	}
-	summary, err := h.txRepo.MonthlySummary(r.Context(), h.coupleID, year, month)
+	summary, err := h.txRepo.MonthlySummary(r.Context(), auth.CoupleIDFromCtx(r.Context()), year, month)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if couple, err2 := h.userRepo.GetCouple(r.Context(), h.coupleID); err2 == nil {
+	if couple, err2 := h.userRepo.GetCouple(r.Context(), auth.CoupleIDFromCtx(r.Context())); err2 == nil {
 		summary.BudgetLimit = couple.MonthlyBudget
 	}
 	respondJSON(w, http.StatusOK, summary)
@@ -533,7 +552,7 @@ func (h *Handler) monthlySummary(w http.ResponseWriter, r *http.Request) {
 // ─────────────────────────────────────────────
 
 func (h *Handler) listStocks(w http.ResponseWriter, r *http.Request) {
-	assets, err := h.stockRepo.ListByCouple(r.Context(), h.coupleID)
+	assets, err := h.stockRepo.ListByCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -586,7 +605,7 @@ func (h *Handler) createStock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	asset := &models.StockAsset{
-		CoupleID:     h.coupleID,
+		CoupleID:     auth.CoupleIDFromCtx(r.Context()),
 		UserID:       req.UserID,
 		Symbol:       strings.ToUpper(strings.TrimSpace(req.Symbol)),
 		Exchange:     strings.ToUpper(strings.TrimSpace(req.Exchange)),
@@ -679,7 +698,7 @@ func (h *Handler) deleteStock(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, err)
 			return
 		}
-		hasSell, _ := h.stxRepo.HasSellInYear(r.Context(), h.coupleID, asset.Symbol, time.Now().Year())
+		hasSell, _ := h.stxRepo.HasSellInYear(r.Context(), auth.CoupleIDFromCtx(r.Context()), asset.Symbol, time.Now().Year())
 		if hasSell {
 			// 409 signals the frontend to show the tax-warning modal
 			respondJSON(w, http.StatusConflict, map[string]interface{}{
@@ -743,7 +762,7 @@ func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 
 	// Append immutable log
 	stx := &models.StockTransaction{
-		CoupleID:         h.coupleID,
+		CoupleID:         auth.CoupleIDFromCtx(r.Context()),
 		UserID:           asset.UserID,
 		StockAssetID:     asset.ID,
 		Symbol:           asset.Symbol,
@@ -804,7 +823,7 @@ func (h *Handler) sellStock(w http.ResponseWriter, r *http.Request) {
 
 	// Append immutable log BEFORE mutating state
 	stx := &models.StockTransaction{
-		CoupleID:         h.coupleID,
+		CoupleID:         auth.CoupleIDFromCtx(r.Context()),
 		UserID:           asset.UserID,
 		StockAssetID:     asset.ID,
 		Symbol:           asset.Symbol,
@@ -863,7 +882,7 @@ func (h *Handler) taxCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	year := time.Now().Year()
-	hasSell, err := h.stxRepo.HasSellInYear(r.Context(), h.coupleID, asset.Symbol, year)
+	hasSell, err := h.stxRepo.HasSellInYear(r.Context(), auth.CoupleIDFromCtx(r.Context()), asset.Symbol, year)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -885,7 +904,7 @@ func (h *Handler) annualTax(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	bySymbol, err := h.stxRepo.AnnualSummary(r.Context(), h.coupleID, year)
+	bySymbol, err := h.stxRepo.AnnualSummary(r.Context(), auth.CoupleIDFromCtx(r.Context()), year)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -902,7 +921,7 @@ func (h *Handler) annualTax(w http.ResponseWriter, r *http.Request) {
 	}
 	summary := models.AnnualTaxSummary{
 		Year:             year,
-		CoupleID:         h.coupleID,
+		CoupleID:         auth.CoupleIDFromCtx(r.Context()),
 		TotalRealizedPnL: totalPnL,
 		TaxableGain:      taxable,
 		EstimatedTax:     taxable * taxRate,
@@ -915,7 +934,7 @@ func (h *Handler) annualTax(w http.ResponseWriter, r *http.Request) {
 // listStockTransactions — GET /api/stocks/transactions
 // Returns all buy/sell transactions for the couple, newest first.
 func (h *Handler) listStockTransactions(w http.ResponseWriter, r *http.Request) {
-	txns, err := h.stxRepo.ListByCouple(r.Context(), h.coupleID)
+	txns, err := h.stxRepo.ListByCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -943,7 +962,7 @@ func (h *Handler) portfolio(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── 2. Load holdings ──────────────────────────────────────────────────────
-	assets, err := h.stockRepo.ListByCouple(ctx, h.coupleID)
+	assets, err := h.stockRepo.ListByCouple(ctx, auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -1093,9 +1112,9 @@ func (h *Handler) listAssets(w http.ResponseWriter, r *http.Request) {
 	var assets []models.OtherAsset
 	var err error
 	if assetType != "" {
-		assets, err = h.assetRepo.ListByType(ctx, h.coupleID, models.OtherAssetType(assetType))
+		assets, err = h.assetRepo.ListByType(ctx, auth.CoupleIDFromCtx(r.Context()), models.OtherAssetType(assetType))
 	} else {
-		assets, err = h.assetRepo.ListByCouple(ctx, h.coupleID)
+		assets, err = h.assetRepo.ListByCouple(ctx, auth.CoupleIDFromCtx(r.Context()))
 	}
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
@@ -1165,7 +1184,7 @@ func (h *Handler) createAsset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	asset := &models.OtherAsset{
-		CoupleID:     h.coupleID,
+		CoupleID:     auth.CoupleIDFromCtx(r.Context()),
 		UserID:       req.UserID,
 		AssetType:    req.AssetType,
 		Name:         req.Name,
@@ -1205,7 +1224,7 @@ func (h *Handler) createAsset(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			fe := &models.FixedExpense{
-				CoupleID:   h.coupleID,
+				CoupleID:   auth.CoupleIDFromCtx(r.Context()),
 				UserID:     created.UserID,
 				Owner:      owner,
 				Kind:       models.FixedExpenseKindSpending,
@@ -1363,7 +1382,7 @@ func (h *Handler) createLoanFixedExpense(w http.ResponseWriter, r *http.Request)
 
 	// 중복 방지: 동일 제목 고정비 이미 존재하면 409
 	expectedTitle := asset.Name + " 납입금"
-	existingFEs, _ := h.feRepo.ListByCouple(ctx, h.coupleID)
+	existingFEs, _ := h.feRepo.ListByCouple(ctx, auth.CoupleIDFromCtx(r.Context()))
 	for _, fe := range existingFEs {
 		if fe.Title == expectedTitle {
 			respondError(w, http.StatusConflict, fmt.Errorf("fixed expense already exists: %q", expectedTitle))
@@ -1382,7 +1401,7 @@ func (h *Handler) createLoanFixedExpense(w http.ResponseWriter, r *http.Request)
 	}
 
 	fe := &models.FixedExpense{
-		CoupleID:   h.coupleID,
+		CoupleID:   auth.CoupleIDFromCtx(r.Context()),
 		UserID:     asset.UserID,
 		Owner:      owner,
 		Kind:       models.FixedExpenseKindSpending,
@@ -1414,7 +1433,7 @@ func (h *Handler) netWorth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 기타 자산 합산
-	otherAssets, err := h.assetRepo.ListByCouple(ctx, h.coupleID)
+	otherAssets, err := h.assetRepo.ListByCouple(ctx, auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -1429,7 +1448,7 @@ func (h *Handler) netWorth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	stocks, _ := h.stockRepo.ListByCouple(ctx, h.coupleID)
+	stocks, _ := h.stockRepo.ListByCouple(ctx, auth.CoupleIDFromCtx(r.Context()))
 	var stockValueKRW float64
 	for _, s := range stocks {
 		snap, _ := h.stockRepo.GetPriceSnapshot(ctx, s.Symbol)
@@ -1458,7 +1477,7 @@ func (h *Handler) netWorth(w http.ResponseWriter, r *http.Request) {
 // ─────────────────────────────────────────────
 
 func (h *Handler) listDividends(w http.ResponseWriter, r *http.Request) {
-	divs, err := h.divRepo.ListByCouple(r.Context(), h.coupleID)
+	divs, err := h.divRepo.ListByCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -1496,7 +1515,7 @@ func (h *Handler) createDividend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d := &models.DividendEvent{
-		CoupleID:       h.coupleID,
+		CoupleID:       auth.CoupleIDFromCtx(r.Context()),
 		UserID:         req.UserID,
 		StockAssetID:   req.StockAssetID,
 		Symbol:         req.Symbol,
@@ -1549,7 +1568,7 @@ func (h *Handler) applyDividendToLedger(ctx context.Context, d *models.DividendE
 		d.AfterTaxAmount, d.Currency, d.TaxRate*100)
 
 	tx := &models.Transaction{
-		CoupleID:      h.coupleID,
+		CoupleID:      auth.CoupleIDFromCtx(ctx),
 		UserID:        d.UserID,
 		Type:          "income",
 		Amount:        d.AmountKRW,
@@ -1597,7 +1616,7 @@ func (h *Handler) dividendSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	events, err := h.divRepo.ListByYear(r.Context(), h.coupleID, year)
+	events, err := h.divRepo.ListByYear(r.Context(), auth.CoupleIDFromCtx(r.Context()), year)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -1650,7 +1669,7 @@ func (h *Handler) dividendSummary(w http.ResponseWriter, r *http.Request) {
 // ─────────────────────────────────────────────
 
 func (h *Handler) listFixedExpenses(w http.ResponseWriter, r *http.Request) {
-	fes, err := h.feRepo.ListByCouple(r.Context(), h.coupleID)
+	fes, err := h.feRepo.ListByCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -1683,7 +1702,7 @@ func (h *Handler) createFixedExpense(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fe := &models.FixedExpense{
-		CoupleID:   h.coupleID,
+		CoupleID:   auth.CoupleIDFromCtx(r.Context()),
 		UserID:     req.UserID,
 		Owner:      req.Owner,
 		Kind:       kind,
@@ -1767,12 +1786,12 @@ func (h *Handler) fixedExpenseSummary(w http.ResponseWriter, r *http.Request) {
 		if v, err := strconv.Atoi(m); err == nil { month = v }
 	}
 
-	fes, err := h.feRepo.ListByCouple(r.Context(), h.coupleID)
+	fes, err := h.feRepo.ListByCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
-	txns, err := h.txRepo.ListByMonth(r.Context(), h.coupleID, year, month)
+	txns, err := h.txRepo.ListByMonth(r.Context(), auth.CoupleIDFromCtx(r.Context()), year, month)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -1839,12 +1858,12 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 		if v, err := strconv.Atoi(m); err == nil { month = v }
 	}
 
-	fes, err := h.feRepo.ListByCouple(r.Context(), h.coupleID)
+	fes, err := h.feRepo.ListByCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
-	txns, err := h.txRepo.ListByMonth(r.Context(), h.coupleID, year, month)
+	txns, err := h.txRepo.ListByMonth(r.Context(), auth.CoupleIDFromCtx(r.Context()), year, month)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -1852,7 +1871,7 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 
 	// Build role → userID map so owner (husband/wife) maps to actual user.
 	roleToUserID := make(map[string]string)
-	if users, uErr := h.userRepo.ListUsers(r.Context()); uErr == nil {
+	if users, uErr := h.userRepo.ListUsers(r.Context(), auth.CoupleIDFromCtx(r.Context())); uErr == nil {
 		for _, u := range users {
 			roleToUserID[u.Role] = u.ID
 		}
@@ -1898,6 +1917,7 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 		// Saving fixed expenses go through SavingService for atomic asset update.
 		if fe.Kind == models.FixedExpenseKindSaving && fe.SavingLink != nil {
 			created, err := h.savingSvc.ApplySaving(r.Context(), service.ApplySavingRequest{
+				CoupleID:       auth.CoupleIDFromCtx(r.Context()),
 				UserID:         resolveOwner(fe.Owner, fe.UserID),
 				AmountKRW:      fe.Amount,
 				Title:          fe.Title,
@@ -1918,7 +1938,7 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 		}
 
 		tx := &models.Transaction{
-			CoupleID:       h.coupleID,
+			CoupleID:       auth.CoupleIDFromCtx(r.Context()),
 			UserID:         resolveOwner(fe.Owner, fe.UserID),
 			Type:           "expense",
 			Amount:         fe.Amount,
@@ -1960,7 +1980,7 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 // ─────────────────────────────────────────────
 
 func (h *Handler) listUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := h.userRepo.ListUsers(context.Background())
+	users, err := h.userRepo.ListUsers(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -1969,7 +1989,7 @@ func (h *Handler) listUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getCouple(w http.ResponseWriter, r *http.Request) {
-	couple, err := h.userRepo.GetCouple(r.Context(), h.coupleID)
+	couple, err := h.userRepo.GetCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -1988,7 +2008,7 @@ func (h *Handler) updateCouple(w http.ResponseWriter, r *http.Request) {
 	}
 	// If ledger_start_day is not provided (zero value), keep existing value.
 	if req.LedgerStartDay == 0 {
-		existing, err := h.userRepo.GetCouple(r.Context(), h.coupleID)
+		existing, err := h.userRepo.GetCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 		if err == nil {
 			req.LedgerStartDay = existing.LedgerStartDay
 		}
@@ -1996,7 +2016,7 @@ func (h *Handler) updateCouple(w http.ResponseWriter, r *http.Request) {
 			req.LedgerStartDay = 1 // fallback default
 		}
 	}
-	couple, err := h.userRepo.UpdateCouple(r.Context(), h.coupleID, req.MonthlyBudget, req.LedgerStartDay)
+	couple, err := h.userRepo.UpdateCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()), req.MonthlyBudget, req.LedgerStartDay)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -2032,9 +2052,9 @@ func (h *Handler) listSchedules(w http.ResponseWriter, r *http.Request) {
 	if yearStr != "" && monthStr != "" {
 		year, _ := strconv.Atoi(yearStr)
 		month, _ := strconv.Atoi(monthStr)
-		schedules, err = h.scheduleRepo.ListByMonth(r.Context(), h.coupleID, year, month)
+		schedules, err = h.scheduleRepo.ListByMonth(r.Context(), auth.CoupleIDFromCtx(r.Context()), year, month)
 	} else {
-		schedules, err = h.scheduleRepo.ListByCouple(r.Context(), h.coupleID)
+		schedules, err = h.scheduleRepo.ListByCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	}
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
@@ -2055,7 +2075,7 @@ func (h *Handler) createSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s := &models.Schedule{
-		CoupleID:    h.coupleID,
+		CoupleID:    auth.CoupleIDFromCtx(r.Context()),
 		UserID:      req.UserID,
 		Title:       req.Title,
 		Description: req.Description,
@@ -2149,9 +2169,9 @@ func (h *Handler) listDiaries(w http.ResponseWriter, r *http.Request) {
 	if yearStr != "" && monthStr != "" {
 		year, _ := strconv.Atoi(yearStr)
 		month, _ := strconv.Atoi(monthStr)
-		diaries, err = h.diaryRepo.ListByMonth(r.Context(), h.coupleID, year, month)
+		diaries, err = h.diaryRepo.ListByMonth(r.Context(), auth.CoupleIDFromCtx(r.Context()), year, month)
 	} else {
-		diaries, err = h.diaryRepo.ListByCouple(r.Context(), h.coupleID)
+		diaries, err = h.diaryRepo.ListByCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	}
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
@@ -2170,7 +2190,7 @@ func (h *Handler) createDiary(w http.ResponseWriter, r *http.Request) {
 		req.Date = time.Now().Format("2006-01-02")
 	}
 	d := &models.DiaryEntry{
-		CoupleID: h.coupleID,
+		CoupleID: auth.CoupleIDFromCtx(r.Context()),
 		UserID:   req.UserID,
 		Date:     req.Date,
 		Content:  req.Content,
@@ -2317,7 +2337,7 @@ func (h *Handler) serveUpload(w http.ResponseWriter, r *http.Request) {
 
 // getCategories — GET /api/categories
 func (h *Handler) getCategories(w http.ResponseWriter, r *http.Request) {
-	cats, err := h.catRepo.Get(r.Context(), h.coupleID)
+	cats, err := h.catRepo.Get(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -2332,7 +2352,7 @@ func (h *Handler) updateCategories(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
-	updated, err := h.catRepo.Update(r.Context(), h.coupleID, &cats)
+	updated, err := h.catRepo.Update(r.Context(), auth.CoupleIDFromCtx(r.Context()), &cats)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -2345,7 +2365,7 @@ func (h *Handler) updateCategories(w http.ResponseWriter, r *http.Request) {
 // ─────────────────────────────────────────────
 
 func (h *Handler) listFridgeItems(w http.ResponseWriter, r *http.Request) {
-	items, err := h.fridgeRepo.ListItems(r.Context(), h.coupleID)
+	items, err := h.fridgeRepo.ListItems(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -2361,7 +2381,7 @@ func (h *Handler) createFridgeItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	item := &models.FridgeItem{
-		CoupleID: h.coupleID,
+		CoupleID: auth.CoupleIDFromCtx(r.Context()),
 		Name:     req.Name,
 		Quantity: req.Quantity,
 		Location: req.Location,
@@ -2394,7 +2414,7 @@ func (h *Handler) updateFridgeItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := h.fridgeRepo.ListItems(r.Context(), h.coupleID)
+	items, err := h.fridgeRepo.ListItems(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -2451,7 +2471,7 @@ func (h *Handler) deleteFridgeItem(w http.ResponseWriter, r *http.Request) {
 // ─────────────────────────────────────────────
 
 func (h *Handler) listSideDishes(w http.ResponseWriter, r *http.Request) {
-	dishes, err := h.fridgeRepo.ListDishes(r.Context(), h.coupleID)
+	dishes, err := h.fridgeRepo.ListDishes(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -2473,7 +2493,7 @@ func (h *Handler) createSideDish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dish := &models.SideDish{
-		CoupleID: h.coupleID,
+		CoupleID: auth.CoupleIDFromCtx(r.Context()),
 		Name:     req.Name,
 		MadeAt:   madeAt,
 		Location: req.Location,
@@ -2505,7 +2525,7 @@ func (h *Handler) updateSideDish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dishes, err := h.fridgeRepo.ListDishes(r.Context(), h.coupleID)
+	dishes, err := h.fridgeRepo.ListDishes(r.Context(), auth.CoupleIDFromCtx(r.Context()))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return

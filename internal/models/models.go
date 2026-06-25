@@ -92,11 +92,26 @@ type UpdateDiaryRequest struct {
 // User represents one of the two spouses.
 type User struct {
 	ID          string    `json:"id"`
+	CoupleID    string    `json:"couple_id"`
 	Name        string    `json:"name"`
 	Email       string    `json:"email"`
+	GoogleSub   string    `json:"google_sub,omitempty"`
 	Role        string    `json:"role"`         // "husband" | "wife"
 	AvatarColor string    `json:"avatar_color"` // hex color for UI
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+// Invite is a one-time link that lets a partner join a couple.
+type Invite struct {
+	ID        string     `json:"id"`
+	CoupleID  string     `json:"couple_id"`
+	Code      string     `json:"code"`
+	Role      *string    `json:"role,omitempty"`
+	CreatedBy string     `json:"created_by"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	UsedAt    *time.Time `json:"used_at,omitempty"`
+	UsedBy    *string    `json:"used_by,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
 }
 
 // Couple is the shared household entity that links two users.

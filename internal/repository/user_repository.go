@@ -49,7 +49,27 @@ func (r *FileUserRepository) GetUser(_ context.Context, userID string) (*models.
 	return nil, fmt.Errorf("user %s not found", userID)
 }
 
-func (r *FileUserRepository) ListUsers(_ context.Context) ([]models.User, error) {
+func (r *FileUserRepository) GetUserByGoogleSub(_ context.Context, _ string) (*models.User, error) {
+	return nil, fmt.Errorf("not supported by FileUserRepository")
+}
+
+func (r *FileUserRepository) GetUserByEmail(_ context.Context, _ string) (*models.User, error) {
+	return nil, fmt.Errorf("not supported by FileUserRepository")
+}
+
+func (r *FileUserRepository) CreateUser(_ context.Context, _ *models.User) (*models.User, error) {
+	return nil, fmt.Errorf("not supported by FileUserRepository")
+}
+
+func (r *FileUserRepository) CreateCouple(_ context.Context, _ *models.Couple) (*models.Couple, error) {
+	return nil, fmt.Errorf("not supported by FileUserRepository")
+}
+
+func (r *FileUserRepository) UpdateUserGoogleSub(_ context.Context, _, _ string) error {
+	return fmt.Errorf("not supported by FileUserRepository")
+}
+
+func (r *FileUserRepository) ListUsers(_ context.Context, _ string) ([]models.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 

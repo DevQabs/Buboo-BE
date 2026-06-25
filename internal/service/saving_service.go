@@ -28,7 +28,6 @@ type SavingService struct {
 	stockRepo repository.StockRepository
 	stxRepo   repository.StockTransactionRepository
 	assetRepo repository.OtherAssetRepository
-	coupleID  string
 }
 
 func NewSavingService(
@@ -36,19 +35,18 @@ func NewSavingService(
 	stockRepo repository.StockRepository,
 	stxRepo repository.StockTransactionRepository,
 	assetRepo repository.OtherAssetRepository,
-	coupleID string,
 ) *SavingService {
 	return &SavingService{
 		txRepo:    txRepo,
 		stockRepo: stockRepo,
 		stxRepo:   stxRepo,
 		assetRepo: assetRepo,
-		coupleID:  coupleID,
 	}
 }
 
 // ApplySavingRequest carries all inputs needed for ApplySaving.
 type ApplySavingRequest struct {
+	CoupleID       string
 	UserID         string
 	AmountKRW      int64
 	Title          string
@@ -79,7 +77,7 @@ func (s *SavingService) ApplySaving(ctx context.Context, req ApplySavingRequest)
 	link := req.Link // local copy — applyStock/applyOtherAsset may set LinkAssetID
 
 	tx := &models.Transaction{
-		CoupleID:       s.coupleID,
+		CoupleID:       req.CoupleID,
 		UserID:         req.UserID,
 		Type:           "saving",
 		Amount:         req.AmountKRW,
@@ -182,7 +180,7 @@ func (s *SavingService) applyStock(ctx context.Context, tx *models.Transaction, 
 			cur = "USD"
 		}
 		newAsset := &models.StockAsset{
-			CoupleID:     s.coupleID,
+			CoupleID:     tx.CoupleID,
 			UserID:       tx.UserID,
 			Symbol:       strings.ToUpper(strings.TrimSpace(link.NewStockSymbol)),
 			Exchange:     strings.ToUpper(strings.TrimSpace(link.NewStockExchange)),
@@ -208,7 +206,7 @@ func (s *SavingService) applyStock(ctx context.Context, tx *models.Transaction, 
 
 	// Step 3: append immutable stock transaction log (non-fatal)
 	stx := &models.StockTransaction{
-		CoupleID:     s.coupleID,
+		CoupleID:     tx.CoupleID,
 		UserID:       tx.UserID,
 		StockAssetID: assetID,
 		Symbol:       symbol,
@@ -253,7 +251,7 @@ func (s *SavingService) applyOtherAsset(ctx context.Context, tx *models.Transact
 	}
 
 	newAsset := &models.OtherAsset{
-		CoupleID:   s.coupleID,
+		CoupleID:   tx.CoupleID,
 		UserID:     tx.UserID,
 		AssetType:  assetType,
 		Name:       assetName,

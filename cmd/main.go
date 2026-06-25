@@ -23,8 +23,12 @@ func main() {
 	loadDotEnv()
 	port     := envOr("PORT", "8090")
 	dataDir  := envOr("DATA_DIR", "./data")
-	coupleID := envOr("COUPLE_ID", "couple-001")
 	allowedOrigins := parseOrigins(envOr("ALLOWED_ORIGINS", "*"))
+
+	jwtSecret := []byte(os.Getenv("JWT_SECRET"))
+	if len(jwtSecret) == 0 {
+		log.Fatal("JWT_SECRET is required")
+	}
 
 	ctx := context.Background()
 
@@ -41,6 +45,7 @@ func main() {
 		diaryRepo    repository.DiaryRepository
 		catRepo      repository.CategoryRepository
 		fridgeRepo   repository.FridgeRepository
+		inviteRepo   repository.InviteRepository
 	)
 
 	pool, err := db.New(ctx)
@@ -59,6 +64,7 @@ func main() {
 	diaryRepo    = repository.NewPgDiaryRepository(pool)
 	catRepo      = repository.NewPgCategoryRepository(pool)
 	fridgeRepo   = repository.NewPgFridgeRepository(pool)
+	inviteRepo   = repository.NewPgInviteRepository(pool)
 
 	// ── S3-compatible Storage ─────────────────────────────────────────────────
 	var stor *storage.SupabaseStorage
@@ -83,13 +89,13 @@ func main() {
 
 	// ── Services ──────────────────────────────────────────────────────────────
 	priceSvc  := service.NewPriceService()
-	savingSvc := service.NewSavingService(txRepo, stockRepo, stxRepo, assetRepo, coupleID)
+	savingSvc := service.NewSavingService(txRepo, stockRepo, stxRepo, assetRepo)
 
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := handler.New(
 		txRepo, stockRepo, stxRepo, userRepo, assetRepo,
 		feRepo, divRepo, scheduleRepo, diaryRepo, catRepo, fridgeRepo,
-		priceSvc, savingSvc, coupleID, allowedOrigins, uploadsDir, stor,
+		inviteRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, stor,
 	).NewRouter()
 
 	srv := &http.Server{
