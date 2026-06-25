@@ -93,11 +93,8 @@ func (h *Handler) authCallback(w http.ResponseWriter, r *http.Request) {
 			}
 			if !taken["husband"] {
 				role = "husband"
-			} else if !taken["wife"] {
-				role = "wife"
 			} else {
-				respondError(w, http.StatusConflict, errorf("couple already has two members"))
-				return
+				role = "wife"
 			}
 		}
 
