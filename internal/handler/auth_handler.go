@@ -300,7 +300,7 @@ func nameFromEmail(email string) string {
 
 func defaultColor(role string) string {
 	if role == "wife" {
-		return "#059669"
+		return "#FDA4AF"
 	}
 	return "#0F4C81"
 }
