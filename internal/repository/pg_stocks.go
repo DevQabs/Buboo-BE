@@ -21,7 +21,7 @@ func NewPgStockRepository(db *pgxpool.Pool) *PgStockRepository {
 
 const stockCols = `id, couple_id, user_id, symbol, exchange, name, name_en,
 	quantity, average_price, currency, sector, memo, logo_url,
-	purchased_at, created_at, updated_at, avg_krw_price`
+	purchased_at, created_at, updated_at, avg_krw_price, sort_order`
 
 func scanStock(row interface{ Scan(dest ...any) error }) (*models.StockAsset, error) {
 	var a models.StockAsset
@@ -30,7 +30,7 @@ func scanStock(row interface{ Scan(dest ...any) error }) (*models.StockAsset, er
 		&a.ID, &a.CoupleID, &a.UserID, &a.Symbol, &a.Exchange,
 		&a.Name, &a.NameEn, &a.Quantity, &a.AveragePrice,
 		&a.Currency, &a.Sector, &a.Memo, &logoURL,
-		&a.PurchasedAt, &a.CreatedAt, &a.UpdatedAt, &a.AvgKRWPrice,
+		&a.PurchasedAt, &a.CreatedAt, &a.UpdatedAt, &a.AvgKRWPrice, &a.SortOrder,
 	); err != nil {
 		return nil, err
 	}
@@ -50,7 +50,7 @@ func (r *PgStockRepository) GetByID(ctx context.Context, id string) (*models.Sto
 }
 
 func (r *PgStockRepository) ListByCouple(ctx context.Context, coupleID string) ([]models.StockAsset, error) {
-	rows, err := r.db.Query(ctx, `SELECT `+stockCols+` FROM stock_assets WHERE couple_id = $1 ORDER BY created_at`, coupleID)
+	rows, err := r.db.Query(ctx, `SELECT `+stockCols+` FROM stock_assets WHERE couple_id = $1 ORDER BY sort_order, created_at`, coupleID)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func (r *PgStockRepository) ListByCouple(ctx context.Context, coupleID string) (
 
 func (r *PgStockRepository) ListByUser(ctx context.Context, coupleID, userID string) ([]models.StockAsset, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT `+stockCols+` FROM stock_assets WHERE couple_id = $1 AND user_id = $2 ORDER BY created_at`,
+		`SELECT `+stockCols+` FROM stock_assets WHERE couple_id = $1 AND user_id = $2 ORDER BY sort_order, created_at`,
 		coupleID, userID)
 	if err != nil {
 		return nil, err
@@ -81,8 +81,13 @@ func (r *PgStockRepository) Create(ctx context.Context, asset *models.StockAsset
 	_, err := r.db.Exec(ctx,
 		`INSERT INTO stock_assets
 		 (id, couple_id, user_id, symbol, exchange, name, name_en, quantity,
-		  average_price, currency, sector, memo, logo_url, purchased_at, created_at, updated_at, avg_krw_price)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		  average_price, currency, sector, memo, logo_url, purchased_at, created_at, updated_at, avg_krw_price,
+		  sort_order)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+		         COALESCE(
+		             (SELECT MIN(sort_order) FROM stock_assets WHERE couple_id = $2 AND symbol = $4 AND exchange = $5),
+		             (SELECT MAX(sort_order) + 1 FROM stock_assets WHERE couple_id = $2),
+		             0))`,
 		asset.ID, asset.CoupleID, asset.UserID, asset.Symbol, asset.Exchange,
 		asset.Name, asset.NameEn, asset.Quantity, asset.AveragePrice,
 		asset.Currency, asset.Sector, asset.Memo, asset.LogoURL,
@@ -111,6 +116,30 @@ func (r *PgStockRepository) Update(ctx context.Context, asset *models.StockAsset
 		return nil, fmt.Errorf("stock %s not found", asset.ID)
 	}
 	return asset, nil
+}
+
+// Reorder rewrites sort_order for the given stock asset IDs, using their
+// position in the slice. The frontend groups holdings by symbol+exchange, so it
+// sends every row of a group consecutively — that keeps a group's rows adjacent
+// in the stored order. IDs outside the couple are ignored.
+func (r *PgStockRepository) Reorder(ctx context.Context, coupleID string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	for i, id := range ids {
+		if _, err := tx.Exec(ctx,
+			`UPDATE stock_assets SET sort_order = $1 WHERE id = $2 AND couple_id = $3`,
+			i, id, coupleID); err != nil {
+			return fmt.Errorf("reorder stock %s: %w", id, err)
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *PgStockRepository) Delete(ctx context.Context, id string) error {

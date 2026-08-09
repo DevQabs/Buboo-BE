@@ -108,7 +108,7 @@ func (h *Handler) NewRouter() chi.Router {
 	r.Use(middleware.RequestID)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   h.allowOrigins,
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		AllowCredentials: false,
 		MaxAge:           300,
@@ -173,6 +173,8 @@ func (h *Handler) NewRouter() chi.Router {
 			r.Post("/refresh", h.refreshPrices)
 			r.Get("/tax", h.annualTax)           // GET /api/stocks/tax?year=2026
 			r.Get("/transactions", h.listStockTransactions) // GET /api/stocks/transactions
+			// Must be registered BEFORE /{id} to avoid routing conflict
+			r.Patch("/reorder", h.reorderStocks) // PATCH /api/stocks/reorder
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.getStock)
 				r.Put("/", h.updateStock)
@@ -188,6 +190,8 @@ func (h *Handler) NewRouter() chi.Router {
 			r.Get("/", h.listAssets)           // 전체 목록 (type 쿼리 파라미터로 필터)
 			r.Post("/", h.createAsset)          // 자산 추가
 			r.Get("/net-worth", h.netWorth)     // 순자산 요약 (주식 + 기타)
+			// Must be registered BEFORE /{id} to avoid routing conflict
+			r.Patch("/reorder", h.reorderAssets) // PATCH /api/assets/reorder
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.getAsset)          // 단건 조회
 				r.Put("/", h.updateAsset)       // 수정 (partial update)
@@ -711,6 +715,26 @@ func (h *Handler) deleteStock(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.stockRepo.Delete(r.Context(), id); err != nil {
 		respondError(w, http.StatusNotFound, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// reorderStocks applies a manual ordering to the couple's stock holdings.
+// PATCH /api/stocks/reorder  {"ids": ["stock-...", "stock-..."]}
+//
+// The frontend displays holdings grouped by symbol+exchange, so it sends every
+// row of a group consecutively; index becomes sort_order as-is.
+func (h *Handler) reorderStocks(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.stockRepo.Reorder(r.Context(), auth.CoupleIDFromCtx(r.Context()), body.IDs); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1349,6 +1373,26 @@ func (h *Handler) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := h.assetRepo.Delete(r.Context(), id); err != nil {
 		respondError(w, http.StatusNotFound, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// reorderAssets applies a manual ordering to the couple's other assets.
+// PATCH /api/assets/reorder  {"ids": ["asset-...", "asset-..."]}
+//
+// The body carries the complete ordered list, not a delta — each ID's index
+// becomes its sort_order, so a stale client can never leave gaps or duplicates.
+func (h *Handler) reorderAssets(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.assetRepo.Reorder(r.Context(), auth.CoupleIDFromCtx(r.Context()), body.IDs); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -253,6 +253,7 @@ type StockAsset struct {
 	Memo         string    `json:"memo"`
 	LogoURL      *string   `json:"logo_url"`     // nullable – 추후 CDN 연동
 	PurchasedAt  time.Time `json:"purchased_at"`
+	SortOrder    int       `json:"sort_order"`   // 수동 정렬 순서 (드래그 앤 드롭)
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -451,6 +452,7 @@ type OtherAsset struct {
 	// 공통
 	Memo       string    `json:"memo"`
 	AcquiredAt time.Time `json:"acquired_at"`
+	SortOrder  int       `json:"sort_order"` // 수동 정렬 순서 (드래그 앤 드롭)
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }

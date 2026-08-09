@@ -24,7 +24,7 @@ const assetCols = `id, couple_id, user_id, asset_type, name, description,
 	value_krw, value_usd, cost_krw, currency, is_liability, is_locked,
 	location, maturity_date, interest_rate,
 	loan_type, payment_day,
-	memo, acquired_at, created_at, updated_at`
+	memo, acquired_at, sort_order, created_at, updated_at`
 
 func scanAsset(row interface{ Scan(dest ...any) error }) (*models.OtherAsset, error) {
 	var a models.OtherAsset
@@ -37,7 +37,7 @@ func scanAsset(row interface{ Scan(dest ...any) error }) (*models.OtherAsset, er
 		&a.ValueKRW, &valueUSD, &a.CostKRW, &a.Currency, &a.IsLiability, &a.IsLocked,
 		&locJSON, &maturity, &rate,
 		&a.LoanType, &a.PaymentDay,
-		&a.Memo, &a.AcquiredAt, &a.CreatedAt, &a.UpdatedAt,
+		&a.Memo, &a.AcquiredAt, &a.SortOrder, &a.CreatedAt, &a.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -70,7 +70,7 @@ func (r *PgOtherAssetRepository) GetByID(ctx context.Context, id string) (*model
 
 func (r *PgOtherAssetRepository) ListByCouple(ctx context.Context, coupleID string) ([]models.OtherAsset, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT `+assetCols+` FROM other_assets WHERE couple_id = $1 ORDER BY created_at`, coupleID)
+		`SELECT `+assetCols+` FROM other_assets WHERE couple_id = $1 ORDER BY sort_order, created_at`, coupleID)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func (r *PgOtherAssetRepository) ListByCouple(ctx context.Context, coupleID stri
 
 func (r *PgOtherAssetRepository) ListByUser(ctx context.Context, coupleID, userID string) ([]models.OtherAsset, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT `+assetCols+` FROM other_assets WHERE couple_id = $1 AND user_id = $2 ORDER BY created_at`,
+		`SELECT `+assetCols+` FROM other_assets WHERE couple_id = $1 AND user_id = $2 ORDER BY sort_order, created_at`,
 		coupleID, userID)
 	if err != nil {
 		return nil, err
@@ -91,7 +91,7 @@ func (r *PgOtherAssetRepository) ListByUser(ctx context.Context, coupleID, userI
 
 func (r *PgOtherAssetRepository) ListByType(ctx context.Context, coupleID string, assetType models.OtherAssetType) ([]models.OtherAsset, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT `+assetCols+` FROM other_assets WHERE couple_id = $1 AND asset_type = $2 ORDER BY created_at`,
+		`SELECT `+assetCols+` FROM other_assets WHERE couple_id = $1 AND asset_type = $2 ORDER BY sort_order, created_at`,
 		coupleID, string(assetType))
 	if err != nil {
 		return nil, err
@@ -118,8 +118,10 @@ func (r *PgOtherAssetRepository) Create(ctx context.Context, asset *models.Other
 		`INSERT INTO other_assets
 		 (id, couple_id, user_id, asset_type, name, description, value_krw, value_usd, cost_krw,
 		  currency, is_liability, is_locked, location, maturity_date, interest_rate,
-		  loan_type, payment_day, memo, acquired_at, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+		  loan_type, payment_day, memo, acquired_at, sort_order, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+		         COALESCE((SELECT MAX(sort_order) + 1 FROM other_assets WHERE couple_id = $2), 0),
+		         $20,$21)`,
 		asset.ID, asset.CoupleID, asset.UserID, string(asset.AssetType),
 		asset.Name, asset.Description, asset.ValueKRW, asset.ValueUSD, asset.CostKRW,
 		asset.Currency, asset.IsLiability, asset.IsLocked,
@@ -162,6 +164,29 @@ func (r *PgOtherAssetRepository) Update(ctx context.Context, asset *models.Other
 		return nil, fmt.Errorf("asset %s not found", asset.ID)
 	}
 	return asset, nil
+}
+
+// Reorder rewrites sort_order for the given asset IDs, using their position in
+// the slice. IDs outside the couple are ignored. The whole list is applied in a
+// single transaction so a partial write can never leave a half-shuffled order.
+func (r *PgOtherAssetRepository) Reorder(ctx context.Context, coupleID string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	for i, id := range ids {
+		if _, err := tx.Exec(ctx,
+			`UPDATE other_assets SET sort_order = $1 WHERE id = $2 AND couple_id = $3`,
+			i, id, coupleID); err != nil {
+			return fmt.Errorf("reorder asset %s: %w", id, err)
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *PgOtherAssetRepository) Delete(ctx context.Context, id string) error {

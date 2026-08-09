@@ -122,6 +122,33 @@ CREATE TABLE IF NOT EXISTS other_assets (
 ALTER TABLE other_assets ADD COLUMN IF NOT EXISTS loan_type TEXT NOT NULL DEFAULT '';
 ALTER TABLE other_assets ADD COLUMN IF NOT EXISTS payment_day INT NOT NULL DEFAULT 0;
 
+-- Migration: manual sort order (drag & drop reordering)
+ALTER TABLE other_assets ADD COLUMN IF NOT EXISTS sort_order INT NOT NULL DEFAULT 0;
+ALTER TABLE stock_assets ADD COLUMN IF NOT EXISTS sort_order INT NOT NULL DEFAULT 0;
+
+-- Backfill existing rows in created_at order, once. Guarded so that re-running
+-- schema.sql never scrambles an order the user has already customised.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM other_assets WHERE sort_order <> 0) THEN
+        UPDATE other_assets a SET sort_order = r.rn
+        FROM (
+            SELECT id, ROW_NUMBER() OVER (PARTITION BY couple_id ORDER BY created_at) - 1 AS rn
+            FROM other_assets
+        ) r
+        WHERE a.id = r.id;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM stock_assets WHERE sort_order <> 0) THEN
+        UPDATE stock_assets s SET sort_order = r.rn
+        FROM (
+            SELECT id, ROW_NUMBER() OVER (PARTITION BY couple_id ORDER BY created_at) - 1 AS rn
+            FROM stock_assets
+        ) r
+        WHERE s.id = r.id;
+    END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS fixed_expenses (
     id TEXT PRIMARY KEY,
     couple_id TEXT NOT NULL,

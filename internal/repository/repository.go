@@ -73,6 +73,9 @@ type StockRepository interface {
 	// Update replaces an existing stock asset.
 	Update(ctx context.Context, asset *models.StockAsset) (*models.StockAsset, error)
 
+	// Reorder rewrites sort_order from the position of each ID in the slice.
+	Reorder(ctx context.Context, coupleID string, ids []string) error
+
 	// Delete removes a stock asset by ID.
 	Delete(ctx context.Context, id string) error
 
@@ -299,6 +302,9 @@ type OtherAssetRepository interface {
 
 	// Update replaces an existing asset entry.
 	Update(ctx context.Context, asset *models.OtherAsset) (*models.OtherAsset, error)
+
+	// Reorder rewrites sort_order from the position of each ID in the slice.
+	Reorder(ctx context.Context, coupleID string, ids []string) error
 
 	// Delete removes an asset by ID.
 	Delete(ctx context.Context, id string) error
