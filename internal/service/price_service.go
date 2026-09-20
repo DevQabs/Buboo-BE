@@ -50,13 +50,18 @@ type PriceService struct {
 	mu      sync.RWMutex
 	prices  map[string]cachedPrice // "SYMBOL:EXCHANGE" → cached snap
 	fxCache *cachedFX
+
+	// dividends 는 야후 배당 이벤트 캐시다. 배당은 분기에 한 번 바뀌므로
+	// 시세와 같은 TTL 이면 충분하다.
+	dividends map[string]cachedDividends
 }
 
 // NewPriceService creates a PriceService with a shared HTTP client.
 func NewPriceService() *PriceService {
 	return &PriceService{
-		client: &http.Client{Timeout: httpTimeout},
-		prices: make(map[string]cachedPrice),
+		client:    &http.Client{Timeout: httpTimeout},
+		prices:    make(map[string]cachedPrice),
+		dividends: make(map[string]cachedDividends),
 	}
 }
 

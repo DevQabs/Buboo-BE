@@ -5,9 +5,11 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -286,6 +288,72 @@ func (h *Handler) netWorthParts(r *http.Request) (stockKRW, assetKRW, liabilityK
 	return int64(stockValue), assetKRW, liabilityKRW, nil
 }
 
+// dividendPlanFromHoldings는 지금 보유한 종목에서 배당 계획을 만든다.
+//
+// 저장된 계획을 쓰지 않는 이유는 금방 낡기 때문이다. 주식을 사고팔면 주식수가
+// 달라지고 배당도 매년 인상된다. 종목별 최근 3개년 성장률과 TTM 배당을
+// 야후에서 받아 매번 새로 만든다. 배당률이 낮은 종목은 빠진다.
+func (h *Handler) dividendPlanFromHoldings(ctx context.Context, coupleID string) ([]models.DividendHolding, error) {
+	stocks, err := h.stockRepo.ListByCouple(ctx, coupleID)
+	if err != nil {
+		return nil, err
+	}
+
+	// 같은 종목을 둘이 나눠 갖고 있으므로 주식수를 합친다.
+	type holding struct {
+		exchange string
+		shares   float64
+	}
+	merged := make(map[string]holding, len(stocks))
+	symbols := make([]string, 0, len(stocks))
+	for _, s := range stocks {
+		if _, ok := merged[s.Symbol]; !ok {
+			symbols = append(symbols, s.Symbol)
+		}
+		m := merged[s.Symbol]
+		m.exchange = s.Exchange
+		m.shares += s.Quantity
+		merged[s.Symbol] = m
+	}
+
+	snaps, err := h.stockRepo.ListPriceSnapshots(ctx, symbols)
+	if err != nil {
+		return nil, err
+	}
+
+	// 종목마다 HTTP 한 번이라 순서대로 기다리면 종목 수만큼 느려진다.
+	var (
+		mu   sync.Mutex
+		wg   sync.WaitGroup
+		plan = make([]models.DividendHolding, 0, len(symbols))
+	)
+	for _, sym := range symbols {
+		wg.Add(1)
+		go func(sym string) {
+			defer wg.Done()
+			hist, err := h.priceSvc.FetchDividendHistory(ctx, sym, merged[sym].exchange)
+			if err != nil || hist == nil {
+				return // 배당 없는 종목이거나 조회 실패. 계획에서 빠진다
+			}
+			snap, ok := snaps[sym]
+			if !ok {
+				return
+			}
+			d, include := service.DividendPlanFor(sym, merged[sym].shares, snap.Price, hist)
+			if !include {
+				return
+			}
+			mu.Lock()
+			plan = append(plan, d)
+			mu.Unlock()
+		}(sym)
+	}
+	wg.Wait()
+
+	sort.Slice(plan, func(i, j int) bool { return plan[i].Symbol < plan[j].Symbol })
+	return plan, nil
+}
+
 // roadmapProjection — GET /api/roadmap/projection
 //
 // 계획(가정대로 굴린 궤적)과 실적(스냅샷)을 한 번에 준다. 필요 수익률은
@@ -300,10 +368,12 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 		a                                *models.RoadmapAssumptions
 		stockKRW, assetKRW, liabilityKRW int64
 		snapshots                        []models.NetWorthSnapshot
+		divPlan                          []models.DividendHolding
 		goalErr, worthErr, snapErr       error
+		divErr                           error
 		wg                               sync.WaitGroup
 	)
-	wg.Add(3)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		// 가정은 목표에 딸려 있어 이 둘만 순서가 있다.
@@ -319,14 +389,21 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 		defer wg.Done()
 		snapshots, snapErr = h.roadmapRepo.ListSnapshots(ctx, coupleID)
 	}()
+	go func() {
+		defer wg.Done()
+		divPlan, divErr = h.dividendPlanFromHoldings(ctx, coupleID)
+	}()
 	wg.Wait()
 
-	for _, err := range []error{goalErr, worthErr, snapErr} {
+	for _, err := range []error{goalErr, worthErr, snapErr, divErr} {
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err)
 			return
 		}
 	}
+	// 배당 계획은 저장값이 아니라 지금 보유 종목에서 만든 것을 쓴다.
+	a.DividendPlan = divPlan
+
 	// 기타 자산은 저장된 가정이 있으면 그 값을, 없으면 실제 보유분을 쓴다.
 	if a.OtherAssetsKRW == 0 {
 		a.OtherAssetsKRW = assetKRW - liabilityKRW
