@@ -63,6 +63,11 @@ CREATE TABLE IF NOT EXISTS stock_assets (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Migration: KRW 가중평균 매입가. USD 종목의 양도손익을 원화로 내려면 매입
+-- 시점 환율이 반영된 취득가가 있어야 한다. 0이면 취득가 미상으로 보고
+-- 매도를 막는다 (service.ValidateKRWCostBasis).
+ALTER TABLE stock_assets ADD COLUMN IF NOT EXISTS avg_krw_price DOUBLE PRECISION NOT NULL DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS price_snapshots (
     symbol TEXT PRIMARY KEY,
     exchange TEXT NOT NULL DEFAULT '',
@@ -93,6 +98,10 @@ CREATE TABLE IF NOT EXISTS stock_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_stx_couple_symbol ON stock_transactions(couple_id, symbol);
 CREATE INDEX IF NOT EXISTS idx_stx_couple_executed ON stock_transactions(couple_id, executed_at DESC);
+
+-- Migration: 거래 시점 USD/KRW. 0이면 앱 도입 전 데이터라 원화 취득가를
+-- 매수기록으로 복원할 수 없다.
+ALTER TABLE stock_transactions ADD COLUMN IF NOT EXISTS exchange_rate_at_tx DOUBLE PRECISION NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS other_assets (
     id TEXT PRIMARY KEY,
@@ -168,6 +177,10 @@ CREATE TABLE IF NOT EXISTS fixed_expenses (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Migration: 고정비 비활성 시각. is_active → false 로 바뀐 때를 남겨
+-- 월별 집계에서 해지 이후 달을 제외한다.
+ALTER TABLE fixed_expenses ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS dividends (
     id TEXT PRIMARY KEY,
