@@ -908,6 +908,8 @@ type RoadmapMonthPoint struct {
 	DividendAfterTaxKRW  int64  `json:"dividend_after_tax_krw"`
 	ProjectedNetWorthKRW int64  `json:"projected_net_worth_krw"`
 	ActualNetWorthKRW    *int64 `json:"actual_net_worth_krw"`
+	// 실제로 넣은 돈. 저축과 주식 순매수를 합친 값이고, 기록이 없으면 nil이다.
+	ActualContributionKRW *int64 `json:"actual_contribution_krw"`
 }
 
 // RoadmapProjection은 로드맵 화면 한 장에 필요한 전부다.

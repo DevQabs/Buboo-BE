@@ -329,5 +329,8 @@ type RoadmapRepository interface {
 
 	// UpsertSnapshot records this month's net worth, replacing the same month.
 	UpsertSnapshot(ctx context.Context, s *models.NetWorthSnapshot) (*models.NetWorthSnapshot, error)
+
+	// MonthlyContributions sums savings and net stock purchases per month.
+	MonthlyContributions(ctx context.Context, coupleID string, from time.Time) (map[string]int64, error)
 	ListSnapshots(ctx context.Context, coupleID string) ([]models.NetWorthSnapshot, error)
 }

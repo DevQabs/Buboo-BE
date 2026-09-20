@@ -158,3 +158,45 @@ func (r *PgRoadmapRepository) ListSnapshots(ctx context.Context, coupleID string
 	}
 	return out, rows.Err()
 }
+
+// MonthlyContributions는 월별 적립 실적이다.
+//
+// 적립은 저축과 주식 매수를 합친 돈이다. 주식은 매수에서 매도를 뺀 순매수로
+// 본다 — 팔았다 다시 사는 건 새로 넣은 돈이 아니기 때문이다. 원화 환산은
+// 거래 시점 환율을 쓴다.
+//
+// from 이전은 세지 않는다. 앱을 쓰기 전부터 갖고 있던 주식을 등록한 기록이
+// 매수로 남아 있어, 그 달 적립이 실제보다 몇 배로 잡힌다.
+func (r *PgRoadmapRepository) MonthlyContributions(ctx context.Context, coupleID string, from time.Time) (map[string]int64, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT month, SUM(krw)::bigint FROM (
+		   SELECT to_char(executed_at, 'YYYY-MM') AS month,
+		          SUM(CASE WHEN type = 'buy' THEN 1 ELSE -1 END
+		              * quantity * price
+		              * CASE WHEN currency = 'USD' AND exchange_rate_at_tx > 0
+		                     THEN exchange_rate_at_tx ELSE 1 END) AS krw
+		     FROM stock_transactions
+		    WHERE couple_id = $1 AND executed_at >= $2
+		    GROUP BY 1
+		   UNION ALL
+		   SELECT to_char(date, 'YYYY-MM') AS month, SUM(amount) AS krw
+		     FROM transactions
+		    WHERE couple_id = $1 AND date >= $2 AND category LIKE '저축%'
+		    GROUP BY 1
+		 ) t GROUP BY month`, coupleID, from)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]int64)
+	for rows.Next() {
+		var month string
+		var krw int64
+		if err := rows.Scan(&month, &krw); err != nil {
+			return nil, err
+		}
+		out[month] = krw
+	}
+	return out, rows.Err()
+}

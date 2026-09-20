@@ -420,6 +420,12 @@ func dividendPlanFrom(cands []models.DividendCandidate) []models.DividendHolding
 	return plan
 }
 
+// contributionsFrom은 적립 실적을 세기 시작하는 시점이다.
+//
+// 그 전 기록에는 앱을 쓰기 전부터 갖고 있던 주식을 등록한 매수가 섞여 있어,
+// 2026년 8월 한 달 적립이 2.5억으로 잡힌다. 실제로 넣은 돈이 아니다.
+var contributionsFrom = time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
+
 // roadmapProjection — GET /api/roadmap/projection
 //
 // 계획(가정대로 굴린 궤적)과 실적(스냅샷)을 한 번에 준다. 필요 수익률은
@@ -435,11 +441,13 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 		a               *models.RoadmapAssumptions
 		market          *marketView
 		snapshots       []models.NetWorthSnapshot
+		actualContrib   map[string]int64
 		goalErr, mktErr error
 		snapErr         error
+		contribErr      error
 		wg              sync.WaitGroup
 	)
-	wg.Add(3)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		// 가정은 목표에 딸려 있어 이 둘만 순서가 있다.
@@ -455,9 +463,13 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 		defer wg.Done()
 		snapshots, snapErr = h.roadmapRepo.ListSnapshots(ctx, coupleID)
 	}()
+	go func() {
+		defer wg.Done()
+		actualContrib, contribErr = h.roadmapRepo.MonthlyContributions(ctx, coupleID, contributionsFrom)
+	}()
 	wg.Wait()
 
-	for _, err := range []error{goalErr, mktErr, snapErr} {
+	for _, err := range []error{goalErr, mktErr, snapErr, contribErr} {
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err)
 			return
@@ -523,6 +535,10 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 		if v, ok := actualByMonth[months[i].Month]; ok {
 			actual := v
 			months[i].ActualNetWorthKRW = &actual
+		}
+		if v, ok := actualContrib[months[i].Month]; ok {
+			contributed := v
+			months[i].ActualContributionKRW = &contributed
 		}
 	}
 
