@@ -274,3 +274,47 @@ CREATE TABLE IF NOT EXISTS side_dishes (
 );
 CREATE INDEX IF NOT EXISTS idx_side_dishes_couple ON side_dishes(couple_id);
 CREATE INDEX IF NOT EXISTS idx_side_dishes_expires ON side_dishes(couple_id, expires_at);
+
+-- ─────────────────────────────────────────────
+--  Roadmap (목표 순자산 플랜)
+-- ─────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS roadmap_goals (
+    id          TEXT PRIMARY KEY,
+    couple_id   TEXT NOT NULL,
+    title       TEXT NOT NULL DEFAULT '',
+    target_krw  BIGINT NOT NULL DEFAULT 0,
+    target_date DATE NOT NULL,
+    birth_year  INT NOT NULL DEFAULT 0,   -- 나이 표기용
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_roadmap_goals_couple ON roadmap_goals(couple_id, is_active);
+
+CREATE TABLE IF NOT EXISTS roadmap_assumptions (
+    id                TEXT PRIMARY KEY,
+    couple_id         TEXT NOT NULL,
+    goal_id           TEXT NOT NULL,
+    price_growth      DOUBLE PRECISION NOT NULL DEFAULT 0,      -- 연 가격상승률
+    dividend_tax_rate DOUBLE PRECISION NOT NULL DEFAULT 0.154,
+    other_assets_krw  BIGINT NOT NULL DEFAULT 0,                -- 주식 외 자산 (성장 0 가정)
+    contributions     JSONB NOT NULL DEFAULT '[]',              -- [{year, monthly_krw}]
+    dividend_plan     JSONB NOT NULL DEFAULT '[]',              -- [{symbol, shares, dps, ...}]
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_roadmap_assumptions_goal ON roadmap_assumptions(goal_id);
+
+CREATE TABLE IF NOT EXISTS networth_snapshots (
+    id             TEXT PRIMARY KEY,
+    couple_id      TEXT NOT NULL,
+    snapshot_month DATE NOT NULL,          -- 해당 월 1일
+    stock_krw      BIGINT NOT NULL DEFAULT 0,
+    asset_krw      BIGINT NOT NULL DEFAULT 0,
+    liability_krw  BIGINT NOT NULL DEFAULT 0,
+    net_worth_krw  BIGINT NOT NULL DEFAULT 0,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (couple_id, snapshot_month)
+);
+CREATE INDEX IF NOT EXISTS idx_networth_snapshots_couple
+    ON networth_snapshots(couple_id, snapshot_month);

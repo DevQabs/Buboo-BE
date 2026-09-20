@@ -1,0 +1,135 @@
+// roadmap_service.go — 목표 순자산까지의 궤적 시뮬레이션.
+//
+// DB에 의존하지 않는 순수 함수다. 산술이 핵심이므로 DB 없이 테스트할 수 있어야
+// 한다. 계산은 2층으로 나뉜다.
+//
+//  1. 기존 보유분 — 종목별 주식수가 고정이고 배당이 나온다. 주당 배당은
+//     시작률에서 매년 일정 폭씩 감속해 하한에 수렴한다.
+//  2. 신규 풀 — 적립금과 재투자 배당이 쌓인다. 가격상승률만 적용하고 배당은
+//     계산하지 않는다. 어떤 종목을 살지 정해지지 않았기 때문이다.
+//
+// 종목을 팔고 사도 신규 풀로 흡수되므로 포트폴리오가 바뀌어도 로드맵은 유효하다.
+package service
+
+import (
+	"math"
+	"time"
+
+	"github.com/yourname/couple-app/internal/models"
+)
+
+// DividendPerShare는 주어진 연도의 주당 배당을 낸다.
+//
+// StartsYear 전에는 기준 배당 그대로다. 그 뒤로는 시작률에서 해마다 Decay만큼
+// 깎인 인상률을 곱해 나가고, 인상률은 Floor 아래로 내려가지 않는다.
+func DividendPerShare(h models.DividendHolding, year int) float64 {
+	dps := h.DPS
+	for y := h.StartsYear; y <= year; y++ {
+		rate := h.GrowthStart - h.Decay*float64(y-h.StartsYear)
+		if rate < h.Floor {
+			rate = h.Floor
+		}
+		dps *= 1 + rate
+	}
+	return dps
+}
+
+// monthlyContribution은 해당 연도의 월 적립액이다. 스케줄에 없는 해는 0이다.
+func monthlyContribution(cs []models.Contribution, year int) int64 {
+	for _, c := range cs {
+		if c.Year == year {
+			return c.MonthlyKRW
+		}
+	}
+	return 0
+}
+
+// Project는 가정대로 굴렸을 때의 연도별 궤적을 낸다.
+//
+// 월 단위로 굴린다. 연 단위는 적립 시점에 따라 오차가 커진다. 한 달은 적립금과
+// 세후 배당을 신규 풀에 넣은 뒤 가격상승률을 적용하는 순서로 진행한다.
+func Project(a models.RoadmapAssumptions, stockKRW int64, fx float64, start, end time.Time, birthYear int) []models.RoadmapYearRow {
+	monthlyGrowth := math.Pow(1+a.PriceGrowth, 1.0/12.0)
+
+	existing := float64(stockKRW) // 기존 보유분. 배당은 신규 풀로 빠진다
+	pool := 0.0                   // 신규 풀
+
+	rows := make([]models.RoadmapYearRow, 0, end.Year()-start.Year()+1)
+	var row *models.RoadmapYearRow
+
+	for m := firstOfMonth(start); !m.After(end); m = m.AddDate(0, 1, 0) {
+		year := m.Year()
+		if row == nil || row.Year != year {
+			rows = append(rows, models.RoadmapYearRow{
+				Year:       year,
+				Age:        year - birthYear,
+				MonthlyKRW: monthlyContribution(a.Contributions, year),
+			})
+			row = &rows[len(rows)-1]
+		}
+
+		contribution := row.MonthlyKRW
+		dividend := monthlyDividendAfterTax(a, fx, year)
+
+		pool += float64(contribution) + dividend
+		pool *= monthlyGrowth
+		existing *= monthlyGrowth
+
+		row.AnnualContributionKRW += contribution
+		row.DividendAfterTaxKRW += int64(dividend)
+		row.ProjectedNetWorthKRW = int64(existing + pool + float64(a.OtherAssetsKRW))
+	}
+	return rows
+}
+
+// monthlyDividendAfterTax는 기존 보유분에서 그 달에 나오는 세후 배당이다.
+// 연 배당을 12로 나눠 매달 같은 금액이 들어온다고 본다.
+func monthlyDividendAfterTax(a models.RoadmapAssumptions, fx float64, year int) float64 {
+	var annualUSD float64
+	for _, h := range a.DividendPlan {
+		annualUSD += h.Shares * DividendPerShare(h, year)
+	}
+	return annualUSD * fx * (1 - a.DividendTaxRate) / 12
+}
+
+// SolveRequiredGrowth는 목표일에 목표액이 되는 연 가격상승률을 이분탐색으로 찾는다.
+// 적립만으로 목표를 넘으면 음수가, 범위 밖이면 경계값이 나온다.
+func SolveRequiredGrowth(a models.RoadmapAssumptions, stockKRW int64, fx float64, targetKRW int64, start, by time.Time, birthYear int) float64 {
+	lo, hi := -0.5, 0.5
+	final := func(growth float64) int64 {
+		a.PriceGrowth = growth
+		rows := Project(a, stockKRW, fx, start, by, birthYear)
+		if len(rows) == 0 {
+			return 0
+		}
+		return rows[len(rows)-1].ProjectedNetWorthKRW
+	}
+	if final(hi) < targetKRW {
+		return hi
+	}
+	if final(lo) > targetKRW {
+		return lo
+	}
+	for range 60 { // 60회면 배정밀도 한계까지 좁혀진다
+		mid := (lo + hi) / 2
+		if final(mid) < targetKRW {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return (lo + hi) / 2
+}
+
+func firstOfMonth(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
+}
+
+// DividendYield는 기존 보유분의 세후 배당수익률이다. 필요 수익률을 가격상승률과
+// 배당으로 나눠 보여주기 위한 값이다.
+func DividendYield(a models.RoadmapAssumptions, stockKRW int64, fx float64, year int) float64 {
+	if stockKRW <= 0 {
+		return 0
+	}
+	return monthlyDividendAfterTax(a, fx, year) * 12 / float64(stockKRW)
+}

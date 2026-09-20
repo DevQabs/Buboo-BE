@@ -313,3 +313,18 @@ type OtherAssetRepository interface {
 	// Delete removes an asset by ID.
 	Delete(ctx context.Context, id string) error
 }
+
+// RoadmapRepository는 목표 순자산 플랜과 실적 스냅샷을 다룬다.
+type RoadmapRepository interface {
+	// ActiveGoal returns the couple's current goal, or nil if none is set.
+	ActiveGoal(ctx context.Context, coupleID string) (*models.RoadmapGoal, error)
+	UpsertGoal(ctx context.Context, g *models.RoadmapGoal) (*models.RoadmapGoal, error)
+
+	// Assumptions returns the assumptions attached to a goal, or nil if none.
+	Assumptions(ctx context.Context, goalID string) (*models.RoadmapAssumptions, error)
+	UpsertAssumptions(ctx context.Context, a *models.RoadmapAssumptions) (*models.RoadmapAssumptions, error)
+
+	// UpsertSnapshot records this month's net worth, replacing the same month.
+	UpsertSnapshot(ctx context.Context, s *models.NetWorthSnapshot) (*models.NetWorthSnapshot, error)
+	ListSnapshots(ctx context.Context, coupleID string) ([]models.NetWorthSnapshot, error)
+}

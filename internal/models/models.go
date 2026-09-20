@@ -813,3 +813,92 @@ type UpdateSideDishRequest struct {
 	Location  *string `json:"location,omitempty"`
 	Memo      *string `json:"memo,omitempty"`
 }
+
+// ─── 로드맵 ───────────────────────────────────────────────────────────────────
+
+// RoadmapGoal은 부부가 합의한 목표 순자산과 시점이다.
+type RoadmapGoal struct {
+	ID         string    `json:"id"`
+	CoupleID   string    `json:"couple_id"`
+	Title      string    `json:"title"`
+	TargetKRW  int64     `json:"target_krw"`
+	TargetDate time.Time `json:"target_date"`
+	BirthYear  int       `json:"birth_year"` // 나이 표기용
+	IsActive   bool      `json:"is_active"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// Contribution은 한 해의 월 적립액이다.
+type Contribution struct {
+	Year       int   `json:"year"`
+	MonthlyKRW int64 `json:"monthly_krw"`
+}
+
+// DividendHolding은 배당을 내는 기존 보유 종목이다. 주당 배당은 시작률에서
+// 매년 Decay만큼 감속해 Floor에 수렴한다.
+type DividendHolding struct {
+	Symbol      string  `json:"symbol"`
+	Shares      float64 `json:"shares"`
+	DPS         float64 `json:"dps"`          // 기준연도 주당 배당 (USD)
+	GrowthStart float64 `json:"growth_start"` // 0.105 = 10.5%
+	Decay       float64 `json:"decay"`        // 0.003 = 연 0.3%p 감속
+	Floor       float64 `json:"floor"`
+	StartsYear  int     `json:"starts_year"` // 인상 시작 연도. 그 전해까지 DPS 고정
+}
+
+// RoadmapAssumptions는 시뮬레이션 입력이다. 적립 스케줄과 배당 계획은 자주
+// 바뀌는 가정값이라 테이블로 쪼개지 않고 JSONB 한 칼럼에 둔다.
+type RoadmapAssumptions struct {
+	ID              string            `json:"id"`
+	CoupleID        string            `json:"couple_id"`
+	GoalID          string            `json:"goal_id"`
+	PriceGrowth     float64           `json:"price_growth"`
+	DividendTaxRate float64           `json:"dividend_tax_rate"`
+	OtherAssetsKRW  int64             `json:"other_assets_krw"`
+	Contributions   []Contribution    `json:"contributions"`
+	DividendPlan    []DividendHolding `json:"dividend_plan"`
+	UpdatedAt       time.Time         `json:"updated_at"`
+}
+
+// NetWorthSnapshot은 계획 대비 실적을 추적하는 유일한 근거다.
+type NetWorthSnapshot struct {
+	ID            string    `json:"id"`
+	CoupleID      string    `json:"couple_id"`
+	SnapshotMonth time.Time `json:"snapshot_month"` // 해당 월 1일
+	StockKRW      int64     `json:"stock_krw"`
+	AssetKRW      int64     `json:"asset_krw"`
+	LiabilityKRW  int64     `json:"liability_krw"`
+	NetWorthKRW   int64     `json:"net_worth_krw"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// RoadmapYearRow는 연도별 궤적 한 줄이다. ActualNetWorthKRW는 그 해 마지막
+// 스냅샷에서 채우고, 스냅샷이 없으면 nil이다.
+type RoadmapYearRow struct {
+	Year                  int    `json:"year"`
+	Age                   int    `json:"age"`
+	MonthlyKRW            int64  `json:"monthly_krw"`
+	AnnualContributionKRW int64  `json:"annual_contribution_krw"`
+	DividendAfterTaxKRW   int64  `json:"dividend_after_tax_krw"`
+	ProjectedNetWorthKRW  int64  `json:"projected_net_worth_krw"`
+	ActualNetWorthKRW     *int64 `json:"actual_net_worth_krw"`
+}
+
+// RoadmapProjection은 로드맵 화면 한 장에 필요한 전부다.
+type RoadmapProjection struct {
+	Goal struct {
+		TargetKRW   int64  `json:"target_krw"`
+		TargetDate  string `json:"target_date"`
+		AgeAtTarget int    `json:"age_at_target"`
+	} `json:"goal"`
+	Current struct {
+		NetWorthKRW int64   `json:"net_worth_krw"`
+		ProgressPct float64 `json:"progress_pct"`
+		DaysLeft    int     `json:"days_left"`
+	} `json:"current"`
+	RequiredPriceGrowth  float64          `json:"required_price_growth"`
+	CurrentDividendYield float64          `json:"current_dividend_yield"`
+	RequiredTotalReturn  float64          `json:"required_total_return"`
+	Years                []RoadmapYearRow `json:"years"`
+}

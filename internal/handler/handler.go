@@ -45,6 +45,7 @@ type Handler struct {
 	catRepo      repository.CategoryRepository
 	fridgeRepo   repository.FridgeRepository
 	inviteRepo   repository.InviteRepository
+	roadmapRepo  repository.RoadmapRepository
 	priceSvc     *service.PriceService
 	savingSvc    *service.SavingService
 	jwtSecret    []byte
@@ -66,6 +67,7 @@ func New(
 	catRepo repository.CategoryRepository,
 	fridgeRepo repository.FridgeRepository,
 	inviteRepo repository.InviteRepository,
+	roadmapRepo repository.RoadmapRepository,
 	priceSvc *service.PriceService,
 	savingSvc *service.SavingService,
 	jwtSecret []byte,
@@ -86,6 +88,7 @@ func New(
 		catRepo:      catRepo,
 		fridgeRepo:   fridgeRepo,
 		inviteRepo:   inviteRepo,
+		roadmapRepo:  roadmapRepo,
 		priceSvc:     priceSvc,
 		savingSvc:    savingSvc,
 		jwtSecret:    jwtSecret,
@@ -183,6 +186,16 @@ func (h *Handler) NewRouter() chi.Router {
 				r.Post("/sell", h.sellStock)      // 매도
 				r.Get("/tax-check", h.taxCheck)   // 삭제 전 경고 여부 확인
 			})
+		})
+
+		// Roadmap (목표 순자산 플랜)
+		r.Route("/roadmap", func(r chi.Router) {
+			r.Get("/projection", h.roadmapProjection)  // 화면 전체 데이터
+			r.Get("/goal", h.getRoadmapGoal)
+			r.Put("/goal", h.putRoadmapGoal)
+			r.Get("/assumptions", h.getRoadmapAssumptions)
+			r.Put("/assumptions", h.putRoadmapAssumptions)
+			r.Post("/snapshot", h.postNetWorthSnapshot) // 이번 달 실적 적재
 		})
 
 		// Other Assets (부동산, 예금, 가상화폐, 차량 등)
