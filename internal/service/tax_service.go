@@ -5,12 +5,41 @@
 // 매긴다. 공제는 부부 합산이 아니라 각자 250만원씩이다.
 package service
 
+import "fmt"
+
 const (
 	// BasicDeduction은 양도소득 기본공제로, 인별 연 250만원이다.
 	BasicDeduction = 2_500_000.0
 	// CapitalGainsTaxRate는 양도소득세율 20% + 지방소득세 2%다.
 	CapitalGainsTaxRate = 0.22
 )
+
+// 원화 취득가의 타당성 검사 범위. USD/KRW 가 이 밖으로 나간 적은 없으므로,
+// 역산 환율이 범위를 벗어나면 저장된 값이 손상된 것이다. 실제로 UNH 329주는
+// 역산 환율 9.4(avg_krw_price=3,135)로 저장돼 있었고, 그대로 매도하면
+// 양도차익이 4배로 잡혀 세금이 2,833만원 과대계상된다.
+const (
+	minPlausibleUSDKRW = 700
+	maxPlausibleUSDKRW = 2500
+)
+
+// ValidateKRWCostBasis는 원화 취득가가 달러 취득가와 앞뒤가 맞는지 본다.
+// 값이 손상됐으면 매도를 막아, 잘못된 실현손익이 기록되지 않게 한다.
+func ValidateKRWCostBasis(avgUSDPrice, avgKRWPrice float64) error {
+	if avgKRWPrice <= 0 {
+		return fmt.Errorf("원화 취득가가 없습니다 (avg_krw_price=%.4f). 매도 전 취득가를 정정해 주세요", avgKRWPrice)
+	}
+	if avgUSDPrice <= 0 {
+		return fmt.Errorf("달러 취득가가 없습니다 (average_price=%.4f)", avgUSDPrice)
+	}
+	impliedFX := avgKRWPrice / avgUSDPrice
+	if impliedFX < minPlausibleUSDKRW || impliedFX > maxPlausibleUSDKRW {
+		return fmt.Errorf(
+			"원화 취득가가 비정상입니다: %.2f원 ÷ $%.2f = 환율 %.1f. 매도 전 취득가를 정정해 주세요",
+			avgKRWPrice, avgUSDPrice, impliedFX)
+	}
+	return nil
+}
 
 // UserGain은 한 사람의 연간 실현손익(원화, 손익 통산 후)이다.
 type UserGain struct {

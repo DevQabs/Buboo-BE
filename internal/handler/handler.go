@@ -836,9 +836,21 @@ func (h *Handler) sellStock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Realized P&L always stored in KRW
+	// Realized P&L always stored in KRW.
+	//
+	// USD 종목은 원화 취득가가 성해야 원화 손익을 낼 수 있다. 취득가가
+	// 손상됐는데 조용히 달러 손익을 기록하면, 그 값이 KRW로 간주되어
+	// 양도소득세가 1,386배 어긋난다. 그래서 계산 대신 매도를 막는다.
 	var realizedPnL float64
-	if asset.Currency == "USD" && req.ExchangeRate > 0 && asset.AvgKRWPrice > 0 {
+	if asset.Currency == "USD" {
+		if req.ExchangeRate <= 0 {
+			respondError(w, http.StatusBadRequest, fmt.Errorf("매도 환율이 필요합니다"))
+			return
+		}
+		if err := service.ValidateKRWCostBasis(asset.AveragePrice, asset.AvgKRWPrice); err != nil {
+			respondError(w, http.StatusUnprocessableEntity, err)
+			return
+		}
 		// (매도단가 × 환율 - KRW평균매입가) × 수량
 		realizedPnL = (req.Price*req.ExchangeRate - asset.AvgKRWPrice) * req.Quantity
 	} else {
