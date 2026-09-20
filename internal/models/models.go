@@ -306,6 +306,10 @@ type PortfolioSummary struct {
 	// 원화 취득가가 손상돼 오늘 환율로 근사한 종목 수. 0보다 크면 합계 손익에
 	// 그만큼 환차손익이 빠져 있다.
 	KRWBasisApproxCount int `json:"krw_basis_approx_count"`
+	// 지금 전량 매도할 때 더 낼 양도소득세(인별 250만원 공제·22%, 올해
+	// 실현손익과 통산)와 그걸 뺀 순액.
+	EstimatedTaxKRW float64 `json:"estimated_tax_krw"`
+	NetAfterTaxKRW  float64 `json:"net_after_tax_krw"`
 }
 
 // CreateStockRequest is the validated DTO for POST /api/stocks.

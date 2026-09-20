@@ -93,3 +93,14 @@ func CalcCapitalGainsTax(gains []UserGain) []UserTax {
 	}
 	return out
 }
+
+// LiquidationTax는 한 사람이 보유분을 지금 전량 매도할 때 더 낼 양도소득세다.
+//
+// 기본공제 250만원은 한 해에 한 번뿐이라, 올해 이미 실현한 이익이 공제를
+// 얼마나 썼는지에 따라 미실현분의 세금이 달라진다. 그래서 (실현+미실현)
+// 세액에서 실현분만의 세액을 뺀다. 실현이 손실이면 통산돼 세금이 준다.
+func LiquidationTax(realizedPnL, unrealizedPnL float64) float64 {
+	both := CalcCapitalGainsTax([]UserGain{{RealizedPnL: realizedPnL + unrealizedPnL}})[0].EstimatedTax
+	realizedOnly := CalcCapitalGainsTax([]UserGain{{RealizedPnL: realizedPnL}})[0].EstimatedTax
+	return both - realizedOnly
+}

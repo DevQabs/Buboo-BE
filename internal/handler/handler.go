@@ -1016,7 +1016,8 @@ func (h *Handler) portfolio(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── 2. Load holdings ──────────────────────────────────────────────────────
-	assets, err := h.stockRepo.ListByCouple(ctx, auth.CoupleIDFromCtx(r.Context()))
+	coupleID := auth.CoupleIDFromCtx(ctx)
+	assets, err := h.stockRepo.ListByCouple(ctx, coupleID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -1026,6 +1027,7 @@ func (h *Handler) portfolio(w http.ResponseWriter, r *http.Request) {
 	items := make([]models.StockAssetWithPrice, 0, len(assets))
 	var totalValueKRW, totalCostKRW float64
 	var krwBasisApprox int // 원화 취득가가 손상돼 오늘 환율로 근사한 종목 수
+	unrealizedByUser := make(map[string]float64) // 사람별 미실현 손익 (해외주식, KRW)
 
 	for _, a := range assets {
 		item := models.StockAssetWithPrice{StockAsset: a}
@@ -1070,7 +1072,9 @@ func (h *Handler) portfolio(w http.ResponseWriter, r *http.Request) {
 					krwBasisApprox++
 				}
 				totalCostKRW += costKRW
-			default: // KRW — 환산이 없으니 환차손익도 없다
+				// 양도소득세는 인별 과세다. 세금은 아래에서 사람별로 통산해 낸다.
+				unrealizedByUser[a.UserID] += item.ProfitLossKRW
+			default: // KRW — 환산이 없으니 환차손익도 없다. 국내주식은 양도세 대상이 아니다
 				item.CurrentValueKRW = item.CurrentValue
 				item.ProfitLossKRW = item.ProfitLoss
 				item.KRWBasisExact = true
@@ -1089,6 +1093,22 @@ func (h *Handler) portfolio(w http.ResponseWriter, r *http.Request) {
 		totalProfitPct = (totalProfitKRW / totalCostKRW) * 100
 	}
 
+	// 지금 전량 매도하면 낼 양도소득세. 기본공제 250만원은 인별·연 1회라
+	// 올해 이미 실현한 손익까지 통산해야 공제가 두 번 적용되지 않는다.
+	var estimatedTaxKRW float64
+	realized, err := h.stxRepo.AnnualGainsByUser(ctx, coupleID, time.Now().Year())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	realizedByUser := make(map[string]float64, len(realized))
+	for _, g := range realized {
+		realizedByUser[g.UserID] = g.RealizedPnL
+	}
+	for userID, unrealized := range unrealizedByUser {
+		estimatedTaxKRW += service.LiquidationTax(realizedByUser[userID], unrealized)
+	}
+
 	summary := models.PortfolioSummary{
 		TotalValueKRW:  totalValueKRW,
 		TotalCostKRW:   totalCostKRW,
@@ -1099,6 +1119,8 @@ func (h *Handler) portfolio(w http.ResponseWriter, r *http.Request) {
 		CalculatedAt:   time.Now().UTC(),
 
 		KRWBasisApproxCount: krwBasisApprox,
+		EstimatedTaxKRW:     estimatedTaxKRW,
+		NetAfterTaxKRW:      totalValueKRW - estimatedTaxKRW,
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{

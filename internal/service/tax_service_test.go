@@ -155,3 +155,25 @@ func TestValidateKRWCostBasis_RejectsImpossibleExchangeRate(t *testing.T) {
 		t.Error("a basis implying FX 9.4 must be rejected")
 	}
 }
+
+func TestLiquidationTax_DeductsTheBasicAllowanceOnlyOnce(t *testing.T) {
+	// 올해 실현이 없으면 미실현 1,000만에서 250만을 공제하고 22%.
+	if got, want := LiquidationTax(0, 10_000_000), 1_650_000.0; got != want {
+		t.Errorf("want %v, got %v", want, got)
+	}
+	// 실현 300만으로 공제를 이미 다 썼으면 미실현 1,000만 전액이 과세된다.
+	if got, want := LiquidationTax(3_000_000, 10_000_000), 2_200_000.0; got != want {
+		t.Errorf("공제가 두 번 적용됐다: want %v, got %v", want, got)
+	}
+}
+
+func TestLiquidationTax_NetsAgainstARealizedLoss(t *testing.T) {
+	// 실현 -500만이면 미실현 1,000만과 통산해 과표는 500만 - 250만 = 250만.
+	if got, want := LiquidationTax(-5_000_000, 10_000_000), 550_000.0; got != want {
+		t.Errorf("want %v, got %v", want, got)
+	}
+	// 전량 매도해도 통산 결과가 손실이면 세금은 없다.
+	if got := LiquidationTax(-20_000_000, 10_000_000); got != 0 {
+		t.Errorf("손실인데 세금이 나왔다: %v", got)
+	}
+}
