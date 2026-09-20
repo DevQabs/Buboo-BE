@@ -284,8 +284,9 @@ type StockAssetWithPrice struct {
 	CurrentValue    float64   `json:"current_value"`     // quantity × current_price (original currency)
 	CurrentValueKRW float64   `json:"current_value_krw"` // converted to KRW for unified display
 	ProfitLoss      float64   `json:"profit_loss"`       // current_value − (quantity × avg_price), original currency
-	ProfitLossKRW   float64   `json:"profit_loss_krw"`   // profit_loss converted to KRW
+	ProfitLossKRW   float64   `json:"profit_loss_krw"`   // 매입 시점 환율 기준 원화 손익 (환차손익 포함)
 	ProfitLossPct   float64   `json:"profit_loss_pct"`   // profit_loss / cost_basis × 100
+	KRWBasisExact   bool      `json:"krw_basis_exact"`   // false면 avg_krw_price 손상으로 오늘 환율 근사 — 환차손익 미반영
 	Change          float64   `json:"change"`
 	ChangePercent   float64   `json:"change_percent"`
 	ExchangeRate    float64   `json:"exchange_rate,omitempty"` // USD/KRW rate used (only for USD assets)
@@ -302,6 +303,9 @@ type PortfolioSummary struct {
 	USDKRW           float64   `json:"usd_krw"`
 	FXSource         string    `json:"fx_source"` // "live" | "fallback"
 	CalculatedAt     time.Time `json:"calculated_at"`
+	// 원화 취득가가 손상돼 오늘 환율로 근사한 종목 수. 0보다 크면 합계 손익에
+	// 그만큼 환차손익이 빠져 있다.
+	KRWBasisApproxCount int `json:"krw_basis_approx_count"`
 }
 
 // CreateStockRequest is the validated DTO for POST /api/stocks.

@@ -41,6 +41,18 @@ func ValidateKRWCostBasis(avgUSDPrice, avgKRWPrice float64) error {
 	return nil
 }
 
+// KRWCostBasis는 보유분의 원화 취득원가를 낸다.
+//
+// 저장된 원화 평단이 성하면 그걸 쓴다 — 매입 시점 환율이 반영돼 있어
+// 환차손익이 손익에 잡힌다. 손상됐으면 달러 평단을 오늘 환율로 환산해
+// 근사하고, exact=false 로 알린다. 이 경우 환차손익은 0으로 묻힌다.
+func KRWCostBasis(quantity, avgUSDPrice, avgKRWPrice, todayFX float64) (cost float64, exact bool) {
+	if err := ValidateKRWCostBasis(avgUSDPrice, avgKRWPrice); err != nil {
+		return quantity * avgUSDPrice * todayFX, false
+	}
+	return quantity * avgKRWPrice, true
+}
+
 // UserGain은 한 사람의 연간 실현손익(원화, 손익 통산 후)이다.
 type UserGain struct {
 	UserID      string

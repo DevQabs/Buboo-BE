@@ -98,6 +98,41 @@ func TestCapitalGainsTax_TaxesTheNetAcrossSymbolsNotEachSymbol(t *testing.T) {
 	}
 }
 
+// 원화 손익은 매입 시점 환율로 잡은 원가와 비교해야 한다. USD 원가를 오늘
+// 환율로 환산하면 환차손익이 지워진다. 실제로 MCD 230주는 환율 1,404~1,444에
+// 샀는데, 오늘 환율로 환산한 화면에는 797만원 손실로 뜨지만 원화로는
+// 499만원 이익이다 — 부호가 반대다.
+func TestKRWCostBasis_UsesThePurchaseRateNotTodaysRate(t *testing.T) {
+	const qty, avgUSD, avgKRW, todayFX = 140, 275.42, 397_634.87, 1386.01
+
+	cost, exact := KRWCostBasis(qty, avgUSD, avgKRW, todayFX)
+
+	if !exact {
+		t.Fatal("a valid stored basis should be used as-is")
+	}
+	if want := qty * avgKRW; cost != want {
+		t.Errorf("want %v (매입 환율 기준), got %v", want, cost)
+	}
+	if cost == qty*avgUSD*todayFX {
+		t.Error("오늘 환율로 환산했다 — 환차손익이 지워진다")
+	}
+}
+
+func TestKRWCostBasis_FallsBackWhenStoredBasisIsUnusable(t *testing.T) {
+	// NVDA 6주처럼 avg_krw_price 가 0인 행. 손익을 아예 못 내는 것보다는
+	// 오늘 환율로 근사하되, 정확하지 않다고 알려야 한다.
+	const qty, avgUSD, todayFX = 6, 182.75, 1386.01
+
+	cost, exact := KRWCostBasis(qty, avgUSD, 0, todayFX)
+
+	if exact {
+		t.Error("근사값을 정확한 것으로 보고하면 안 된다")
+	}
+	if want := qty * avgUSD * todayFX; cost != want {
+		t.Errorf("want fallback %v, got %v", want, cost)
+	}
+}
+
 func TestValidateKRWCostBasis_AcceptsAPlausibleBasis(t *testing.T) {
 	// MCD: $273.24 를 환율 1,180 에 샀다.
 	if err := ValidateKRWCostBasis(273.24, 322_381.74); err != nil {

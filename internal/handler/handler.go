@@ -1025,6 +1025,7 @@ func (h *Handler) portfolio(w http.ResponseWriter, r *http.Request) {
 	// ── 3. Enrich each holding with live price ────────────────────────────────
 	items := make([]models.StockAssetWithPrice, 0, len(assets))
 	var totalValueKRW, totalCostKRW float64
+	var krwBasisApprox int // 원화 취득가가 손상돼 오늘 환율로 근사한 종목 수
 
 	for _, a := range assets {
 		item := models.StockAssetWithPrice{StockAsset: a}
@@ -1058,12 +1059,21 @@ func (h *Handler) portfolio(w http.ResponseWriter, r *http.Request) {
 			switch strings.ToUpper(a.Currency) {
 			case "USD":
 				item.CurrentValueKRW = item.CurrentValue * usdKRW
-				item.ProfitLossKRW = item.ProfitLoss * usdKRW
 				item.ExchangeRate = usdKRW
-				totalCostKRW += costBasis * usdKRW
-			default: // KRW
+				// 원화 손익은 매입 시점 환율로 잡은 원가와 비교한다. USD 원가를
+				// 오늘 환율로 환산하면 환차손익이 지워져, 원화로는 이익인
+				// 종목이 손실로 뜨기도 한다.
+				costKRW, exact := service.KRWCostBasis(a.Quantity, a.AveragePrice, a.AvgKRWPrice, usdKRW)
+				item.ProfitLossKRW = item.CurrentValueKRW - costKRW
+				item.KRWBasisExact = exact
+				if !exact {
+					krwBasisApprox++
+				}
+				totalCostKRW += costKRW
+			default: // KRW — 환산이 없으니 환차손익도 없다
 				item.CurrentValueKRW = item.CurrentValue
 				item.ProfitLossKRW = item.ProfitLoss
+				item.KRWBasisExact = true
 				totalCostKRW += costBasis
 			}
 			totalValueKRW += item.CurrentValueKRW
@@ -1087,6 +1097,8 @@ func (h *Handler) portfolio(w http.ResponseWriter, r *http.Request) {
 		USDKRW:         usdKRW,
 		FXSource:       fxSource,
 		CalculatedAt:   time.Now().UTC(),
+
+		KRWBasisApproxCount: krwBasisApprox,
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{
