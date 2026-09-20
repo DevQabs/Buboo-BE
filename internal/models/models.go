@@ -61,10 +61,10 @@ type DiaryEntry struct {
 	ID        string    `json:"id"`
 	CoupleID  string    `json:"couple_id"`
 	UserID    string    `json:"user_id"`
-	Date      string    `json:"date"`    // YYYY-MM-DD
+	Date      string    `json:"date"` // YYYY-MM-DD
 	Content   string    `json:"content"`
-	Photos    []string  `json:"photos"`  // filenames under uploads/
-	Mood      string    `json:"mood"`    // "happy"|"good"|"normal"|"sad"|"tired"
+	Photos    []string  `json:"photos"` // filenames under uploads/
+	Mood      string    `json:"mood"`   // "happy"|"good"|"normal"|"sad"|"tired"
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -138,8 +138,8 @@ type UsersFile struct {
 // Both fields are pointers (nullable) to support future map API integration.
 type Location struct {
 	Name    string   `json:"name"`
-	Lat     *float64 `json:"lat"`     // nullable – OSM/Naver 지도 연동 예정
-	Lng     *float64 `json:"lng"`     // nullable – OSM/Naver 지도 연동 예정
+	Lat     *float64 `json:"lat"` // nullable – OSM/Naver 지도 연동 예정
+	Lng     *float64 `json:"lng"` // nullable – OSM/Naver 지도 연동 예정
 	Address string   `json:"address"`
 }
 
@@ -163,9 +163,9 @@ type SavingLink struct {
 	AddStockPrice float64 `json:"add_stock_price,omitempty"` // per share
 
 	// Stock: create new (LinkAssetID == "")
-	NewStockSymbol   string `json:"new_stock_symbol,omitempty"`
-	NewStockExchange string `json:"new_stock_exchange,omitempty"`
-	NewStockName     string `json:"new_stock_name,omitempty"`
+	NewStockSymbol   string  `json:"new_stock_symbol,omitempty"`
+	NewStockExchange string  `json:"new_stock_exchange,omitempty"`
+	NewStockName     string  `json:"new_stock_name,omitempty"`
 	NewStockQty      float64 `json:"new_stock_qty,omitempty"`
 	NewStockPrice    float64 `json:"new_stock_price,omitempty"` // avg price per share
 	NewStockCurrency string  `json:"new_stock_currency,omitempty"`
@@ -181,18 +181,18 @@ type Transaction struct {
 	ID             string      `json:"id"`
 	CoupleID       string      `json:"couple_id"`
 	UserID         string      `json:"user_id"`
-	Type           string      `json:"type"`            // "income" | "expense" | "saving"
-	Amount         int64       `json:"amount"`          // 단위: 원(KRW) 또는 외화 최소 단위
-	Currency       string      `json:"currency"`        // "KRW" | "USD" 등
-	Category       string      `json:"category"`        // 대분류: "식비", "급여" 등
-	Subcategory    string      `json:"subcategory"`     // 소분류
+	Type           string      `json:"type"`        // "income" | "expense" | "saving"
+	Amount         int64       `json:"amount"`      // 단위: 원(KRW) 또는 외화 최소 단위
+	Currency       string      `json:"currency"`    // "KRW" | "USD" 등
+	Category       string      `json:"category"`    // 대분류: "식비", "급여" 등
+	Subcategory    string      `json:"subcategory"` // 소분류
 	Title          string      `json:"title"`
 	Memo           string      `json:"memo"`
 	Date           time.Time   `json:"date"`
-	PaymentMethod  string      `json:"payment_method"`  // "신용카드" | "체크카드" | "현금" 등
-	IsFixed        bool        `json:"is_fixed"`        // 고정 지출/수입 여부
+	PaymentMethod  string      `json:"payment_method"` // "신용카드" | "체크카드" | "현금" 등
+	IsFixed        bool        `json:"is_fixed"`       // 고정 지출/수입 여부
 	Tags           []string    `json:"tags"`
-	Location       *Location   `json:"location"`        // nullable – 지도 미연동 시 null
+	Location       *Location   `json:"location"`                   // nullable – 지도 미연동 시 null
 	FixedExpenseID *string     `json:"fixed_expense_id,omitempty"` // 고정비 자동 생성 시 연결 ID
 	SavingLink     *SavingLink `json:"saving_link,omitempty"`      // non-nil when type=="saving"
 	CreatedAt      time.Time   `json:"created_at"`
@@ -241,19 +241,19 @@ type StockAsset struct {
 	ID           string    `json:"id"`
 	CoupleID     string    `json:"couple_id"`
 	UserID       string    `json:"user_id"`
-	Symbol       string    `json:"symbol"`       // 종목 코드, e.g. "005930", "AAPL"
-	Exchange     string    `json:"exchange"`     // "KRX" | "NASDAQ" | "NYSE" 등
-	Name         string    `json:"name"`         // 한글 종목명
-	NameEn       string    `json:"name_en"`      // 영문 종목명
-	Quantity     float64   `json:"quantity"`     // 보유 수량 (소수 허용: ETF 등)
+	Symbol       string    `json:"symbol"`        // 종목 코드, e.g. "005930", "AAPL"
+	Exchange     string    `json:"exchange"`      // "KRX" | "NASDAQ" | "NYSE" 등
+	Name         string    `json:"name"`          // 한글 종목명
+	NameEn       string    `json:"name_en"`       // 영문 종목명
+	Quantity     float64   `json:"quantity"`      // 보유 수량 (소수 허용: ETF 등)
 	AveragePrice float64   `json:"average_price"` // 평균 매입가 (원화 통화)
 	AvgKRWPrice  float64   `json:"avg_krw_price"` // KRW 가중평균 매입가 (환율 반영)
-	Currency     string    `json:"currency"`     // 거래 통화
-	Sector       string    `json:"sector"`       // 섹터 분류
+	Currency     string    `json:"currency"`      // 거래 통화
+	Sector       string    `json:"sector"`        // 섹터 분류
 	Memo         string    `json:"memo"`
-	LogoURL      *string   `json:"logo_url"`     // nullable – 추후 CDN 연동
+	LogoURL      *string   `json:"logo_url"` // nullable – 추후 CDN 연동
 	PurchasedAt  time.Time `json:"purchased_at"`
-	SortOrder    int       `json:"sort_order"`   // 수동 정렬 순서 (드래그 앤 드롭)
+	SortOrder    int       `json:"sort_order"` // 수동 정렬 순서 (드래그 앤 드롭)
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -261,13 +261,13 @@ type StockAsset struct {
 // PriceSnapshot holds the latest fetched price for a symbol.
 // In MVP this is stored in stocks.json; later it will come from a real API.
 type PriceSnapshot struct {
-	Symbol          string    `json:"symbol"`
-	Exchange        string    `json:"exchange"`
-	Price           float64   `json:"price"`
-	Currency        string    `json:"currency"`
-	Change          float64   `json:"change"`          // 전일 대비 변동액
-	ChangePercent   float64   `json:"change_percent"`  // 전일 대비 변동률 (%)
-	SnapshottedAt   time.Time `json:"snapshotted_at"`
+	Symbol        string    `json:"symbol"`
+	Exchange      string    `json:"exchange"`
+	Price         float64   `json:"price"`
+	Currency      string    `json:"currency"`
+	Change        float64   `json:"change"`         // 전일 대비 변동액
+	ChangePercent float64   `json:"change_percent"` // 전일 대비 변동률 (%)
+	SnapshottedAt time.Time `json:"snapshotted_at"`
 }
 
 // StockAssetsFile mirrors the top-level structure of stocks.json.
@@ -296,13 +296,13 @@ type StockAssetWithPrice struct {
 
 // PortfolioSummary is the aggregate view returned alongside portfolio items.
 type PortfolioSummary struct {
-	TotalValueKRW    float64   `json:"total_value_krw"`
-	TotalCostKRW     float64   `json:"total_cost_krw"`
-	TotalProfitKRW   float64   `json:"total_profit_krw"`
-	TotalProfitPct   float64   `json:"total_profit_pct"`
-	USDKRW           float64   `json:"usd_krw"`
-	FXSource         string    `json:"fx_source"` // "live" | "fallback"
-	CalculatedAt     time.Time `json:"calculated_at"`
+	TotalValueKRW  float64   `json:"total_value_krw"`
+	TotalCostKRW   float64   `json:"total_cost_krw"`
+	TotalProfitKRW float64   `json:"total_profit_krw"`
+	TotalProfitPct float64   `json:"total_profit_pct"`
+	USDKRW         float64   `json:"usd_krw"`
+	FXSource       string    `json:"fx_source"` // "live" | "fallback"
+	CalculatedAt   time.Time `json:"calculated_at"`
 	// 원화 취득가가 손상돼 오늘 환율로 근사한 종목 수. 0보다 크면 합계 손익에
 	// 그만큼 환차손익이 빠져 있다.
 	KRWBasisApproxCount int `json:"krw_basis_approx_count"`
@@ -330,12 +330,12 @@ type CreateStockRequest struct {
 // UpdateStockRequest is the validated DTO for PUT /api/stocks/{id}.
 // All fields are optional (pointer types) — only non-nil fields are updated.
 type UpdateStockRequest struct {
-	UserID       *string    `json:"user_id"`
-	Name         *string    `json:"name"`
-	Quantity     *float64   `json:"quantity"`
-	AveragePrice *float64   `json:"average_price"`
-	Sector       *string    `json:"sector"`
-	Memo         *string    `json:"memo"`
+	UserID       *string  `json:"user_id"`
+	Name         *string  `json:"name"`
+	Quantity     *float64 `json:"quantity"`
+	AveragePrice *float64 `json:"average_price"`
+	Sector       *string  `json:"sector"`
+	Memo         *string  `json:"memo"`
 }
 
 // ─────────────────────────────────────────────
@@ -353,23 +353,23 @@ const (
 // StockTransaction is an immutable record of a single buy or sell event.
 // It is NEVER updated or deleted — it is the audit log for tax calculation.
 type StockTransaction struct {
-	ID                string      `json:"id"`
-	CoupleID          string      `json:"couple_id"`
-	UserID            string      `json:"user_id"`
-	StockAssetID      string      `json:"stock_asset_id"` // "" if asset was later deleted
-	Symbol            string      `json:"symbol"`
-	Exchange          string      `json:"exchange"`
-	Name              string      `json:"name"`
-	Type              StockTxType `json:"type"`                 // "buy" | "sell"
-	Quantity          float64     `json:"quantity"`
-	Price             float64     `json:"price"`                // per share, original currency
-	Currency          string      `json:"currency"`
-	AvgPriceAtTx      float64     `json:"avg_price_at_tx"`      // avg cost basis at time of tx (original currency)
-	RealizedPnL       float64     `json:"realized_pnl"`         // sell only: always KRW
-	ExchangeRateAtTx  float64     `json:"exchange_rate_at_tx"`  // USD/KRW rate at time of tx; 0 = legacy data
-	Memo              string      `json:"memo"`
-	ExecutedAt        time.Time   `json:"executed_at"`
-	CreatedAt         time.Time   `json:"created_at"`
+	ID               string      `json:"id"`
+	CoupleID         string      `json:"couple_id"`
+	UserID           string      `json:"user_id"`
+	StockAssetID     string      `json:"stock_asset_id"` // "" if asset was later deleted
+	Symbol           string      `json:"symbol"`
+	Exchange         string      `json:"exchange"`
+	Name             string      `json:"name"`
+	Type             StockTxType `json:"type"` // "buy" | "sell"
+	Quantity         float64     `json:"quantity"`
+	Price            float64     `json:"price"` // per share, original currency
+	Currency         string      `json:"currency"`
+	AvgPriceAtTx     float64     `json:"avg_price_at_tx"`     // avg cost basis at time of tx (original currency)
+	RealizedPnL      float64     `json:"realized_pnl"`        // sell only: always KRW
+	ExchangeRateAtTx float64     `json:"exchange_rate_at_tx"` // USD/KRW rate at time of tx; 0 = legacy data
+	Memo             string      `json:"memo"`
+	ExecutedAt       time.Time   `json:"executed_at"`
+	CreatedAt        time.Time   `json:"created_at"`
 }
 
 // StockTransactionsFile mirrors the top-level structure of stock_transactions.json.
@@ -463,7 +463,7 @@ type OtherAsset struct {
 	ID          string         `json:"id"`
 	CoupleID    string         `json:"couple_id"`
 	UserID      string         `json:"user_id"`
-	AssetType   OtherAssetType `json:"asset_type"`  // 자산 유형
+	AssetType   OtherAssetType `json:"asset_type"`   // 자산 유형
 	Name        string         `json:"name"`         // 자산명
 	Description string         `json:"description"`  // 상세 설명
 	ValueKRW    int64          `json:"value_krw"`    // 현재 평가액 (원) — USD 현금은 환율 적용 후 값
@@ -500,7 +500,7 @@ type CreateOtherAssetRequest struct {
 	Name         string         `json:"name"`
 	Description  string         `json:"description"`
 	ValueKRW     int64          `json:"value_krw"`
-	ValueUSD     *float64       `json:"value_usd"`  // USD 현금 전용
+	ValueUSD     *float64       `json:"value_usd"` // USD 현금 전용
 	CostKRW      int64          `json:"cost_krw"`
 	Currency     string         `json:"currency"`
 	IsLocked     bool           `json:"is_locked"`
@@ -580,17 +580,17 @@ type DividendEvent struct {
 	Symbol         string     `json:"symbol"`
 	Exchange       string     `json:"exchange"`
 	Name           string     `json:"name"`
-	Quantity       float64    `json:"quantity"`           // shares held at record date
-	AmountPerShare float64    `json:"amount_per_share"`   // dividend per share (original currency)
-	Currency       string     `json:"currency"`           // "USD" etc.
-	TotalAmount    float64    `json:"total_amount"`       // quantity × amount_per_share
-	TaxRate        float64    `json:"tax_rate"`           // 0.154 (US 배당소득세 15.4%)
-	AfterTaxAmount float64    `json:"after_tax_amount"`   // total_amount × (1 − tax_rate)
-	USDKRWRate     float64    `json:"usd_krw_rate"`       // exchange rate at time of entry
-	AmountKRW      int64      `json:"amount_krw"`         // round(after_tax_amount × usd_krw_rate)
+	Quantity       float64    `json:"quantity"`                   // shares held at record date
+	AmountPerShare float64    `json:"amount_per_share"`           // dividend per share (original currency)
+	Currency       string     `json:"currency"`                   // "USD" etc.
+	TotalAmount    float64    `json:"total_amount"`               // quantity × amount_per_share
+	TaxRate        float64    `json:"tax_rate"`                   // 0.154 (US 배당소득세 15.4%)
+	AfterTaxAmount float64    `json:"after_tax_amount"`           // total_amount × (1 − tax_rate)
+	USDKRWRate     float64    `json:"usd_krw_rate"`               // exchange rate at time of entry
+	AmountKRW      int64      `json:"amount_krw"`                 // round(after_tax_amount × usd_krw_rate)
 	ExDividendDate *time.Time `json:"ex_dividend_date,omitempty"` // 배당락일 (optional)
-	PaymentDate    time.Time  `json:"payment_date"`       // 지급일
-	IsApplied      bool       `json:"is_applied"`         // 가계부에 수입으로 반영됐는지
+	PaymentDate    time.Time  `json:"payment_date"`               // 지급일
+	IsApplied      bool       `json:"is_applied"`                 // 가계부에 수입으로 반영됐는지
 	Memo           string     `json:"memo"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
@@ -611,7 +611,7 @@ type CreateDividendRequest struct {
 	Quantity       float64    `json:"quantity"`
 	AmountPerShare float64    `json:"amount_per_share"`
 	Currency       string     `json:"currency"`
-	TaxRate        float64    `json:"tax_rate"`    // defaults to 0.154
+	TaxRate        float64    `json:"tax_rate"` // defaults to 0.154
 	USDKRWRate     float64    `json:"usd_krw_rate"`
 	ExDividendDate *time.Time `json:"ex_dividend_date,omitempty"`
 	PaymentDate    time.Time  `json:"payment_date"`
@@ -621,7 +621,7 @@ type CreateDividendRequest struct {
 // DividendYearlySummary is the response for GET /api/dividends/summary.
 type DividendYearlySummary struct {
 	Year             int             `json:"year"`
-	TotalUSD         float64         `json:"total_usd"`          // pre-tax
+	TotalUSD         float64         `json:"total_usd"` // pre-tax
 	TotalAfterTaxUSD float64         `json:"total_after_tax_usd"`
 	TotalKRW         int64           `json:"total_krw"`
 	AppliedCount     int             `json:"applied_count"`
@@ -656,8 +656,8 @@ type FixedExpenseOwner string
 
 const (
 	FixedOwnerHusband FixedExpenseOwner = "husband" // 남편
-	FixedOwnerWife    FixedExpenseOwner = "wife"     // 아내
-	FixedOwnerJoint   FixedExpenseOwner = "joint"    // 공동
+	FixedOwnerWife    FixedExpenseOwner = "wife"    // 아내
+	FixedOwnerJoint   FixedExpenseOwner = "joint"   // 공동
 )
 
 // FixedExpenseKind distinguishes spending from saving fixed expenses.
@@ -671,24 +671,24 @@ const (
 // FixedExpense is a recurring expense template (e.g. rent, insurance, OTT).
 // It is NOT a transaction itself — it is used to generate transactions each cycle.
 type FixedExpense struct {
-	ID         string            `json:"id"`
-	CoupleID   string            `json:"couple_id"`
-	UserID     string            `json:"user_id"`           // who registered it
-	Owner      FixedExpenseOwner `json:"owner"`             // husband | wife | joint
-	Kind       FixedExpenseKind  `json:"kind"`              // "spending" | "saving"
-	Title      string            `json:"title"`             // e.g. "아파트 관리비"
-	Category   string            `json:"category"`          // e.g. "주거비"
-	Amount     int64             `json:"amount"`            // KRW
-	Currency   string            `json:"currency"`          // 기본 "KRW"
-	Cycle      RecurringCycle    `json:"cycle"`             // "monthly" | "weekly"
-	DayOfMonth int               `json:"day_of_month"`      // 1–28, 매월 N일 이체 (cycle=monthly)
-	DayOfWeek  *int              `json:"day_of_week,omitempty"` // 0=Sun…6=Sat (cycle=weekly)
-	IsActive      bool       `json:"is_active"`
-	DeactivatedAt *time.Time `json:"deactivated_at,omitempty"` // set when is_active → false
-	Memo          string     `json:"memo"`
-	SavingLink    *SavingLink `json:"saving_link,omitempty"` // non-nil when kind=="saving"
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID            string            `json:"id"`
+	CoupleID      string            `json:"couple_id"`
+	UserID        string            `json:"user_id"`               // who registered it
+	Owner         FixedExpenseOwner `json:"owner"`                 // husband | wife | joint
+	Kind          FixedExpenseKind  `json:"kind"`                  // "spending" | "saving"
+	Title         string            `json:"title"`                 // e.g. "아파트 관리비"
+	Category      string            `json:"category"`              // e.g. "주거비"
+	Amount        int64             `json:"amount"`                // KRW
+	Currency      string            `json:"currency"`              // 기본 "KRW"
+	Cycle         RecurringCycle    `json:"cycle"`                 // "monthly" | "weekly"
+	DayOfMonth    int               `json:"day_of_month"`          // 1–28, 매월 N일 이체 (cycle=monthly)
+	DayOfWeek     *int              `json:"day_of_week,omitempty"` // 0=Sun…6=Sat (cycle=weekly)
+	IsActive      bool              `json:"is_active"`
+	DeactivatedAt *time.Time        `json:"deactivated_at,omitempty"` // set when is_active → false
+	Memo          string            `json:"memo"`
+	SavingLink    *SavingLink       `json:"saving_link,omitempty"` // non-nil when kind=="saving"
+	CreatedAt     time.Time         `json:"created_at"`
+	UpdatedAt     time.Time         `json:"updated_at"`
 }
 
 // FixedExpensesFile mirrors the top-level structure of fixed_expenses.json.
@@ -700,7 +700,7 @@ type FixedExpensesFile struct {
 type CreateFixedExpenseRequest struct {
 	UserID     string            `json:"user_id"`
 	Owner      FixedExpenseOwner `json:"owner"`
-	Kind       FixedExpenseKind  `json:"kind"`       // default "spending"
+	Kind       FixedExpenseKind  `json:"kind"` // default "spending"
 	Title      string            `json:"title"`
 	Category   string            `json:"category"`
 	Amount     int64             `json:"amount"`
@@ -885,6 +885,14 @@ type RoadmapYearRow struct {
 	ActualNetWorthKRW     *int64 `json:"actual_net_worth_krw"`
 }
 
+// RoadmapMonthPoint는 월 단위 궤적 한 점이다. 연도별 표는 큰 흐름만 보여줘서,
+// 적립이 실제로 어떻게 쌓이는지 보려면 월 단위가 필요하다.
+type RoadmapMonthPoint struct {
+	Month                string `json:"month"` // YYYY-MM
+	ProjectedNetWorthKRW int64  `json:"projected_net_worth_krw"`
+	ActualNetWorthKRW    *int64 `json:"actual_net_worth_krw"`
+}
+
 // RoadmapProjection은 로드맵 화면 한 장에 필요한 전부다.
 type RoadmapProjection struct {
 	Goal struct {
@@ -897,8 +905,9 @@ type RoadmapProjection struct {
 		ProgressPct float64 `json:"progress_pct"`
 		DaysLeft    int     `json:"days_left"`
 	} `json:"current"`
-	RequiredPriceGrowth  float64          `json:"required_price_growth"`
-	CurrentDividendYield float64          `json:"current_dividend_yield"`
-	RequiredTotalReturn  float64          `json:"required_total_return"`
-	Years                []RoadmapYearRow `json:"years"`
+	RequiredPriceGrowth  float64             `json:"required_price_growth"`
+	CurrentDividendYield float64             `json:"current_dividend_yield"`
+	RequiredTotalReturn  float64             `json:"required_total_return"`
+	Years                []RoadmapYearRow    `json:"years"`
+	Months               []RoadmapMonthPoint `json:"months"`
 }

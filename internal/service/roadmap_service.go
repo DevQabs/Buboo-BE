@@ -44,17 +44,19 @@ func monthlyContribution(cs []models.Contribution, year int) int64 {
 	return 0
 }
 
-// Project는 가정대로 굴렸을 때의 연도별 궤적을 낸다.
+// Project는 가정대로 굴렸을 때의 궤적을 연 단위와 월 단위로 낸다. 두 축을
+// 같은 루프에서 뽑아, 표와 차트가 어긋날 일이 없게 한다.
 //
 // 월 단위로 굴린다. 연 단위는 적립 시점에 따라 오차가 커진다. 한 달은 적립금과
 // 세후 배당을 신규 풀에 넣은 뒤 가격상승률을 적용하는 순서로 진행한다.
-func Project(a models.RoadmapAssumptions, stockKRW int64, fx float64, start, end time.Time, birthYear int) []models.RoadmapYearRow {
+func Project(a models.RoadmapAssumptions, stockKRW int64, fx float64, start, end time.Time, birthYear int) ([]models.RoadmapYearRow, []models.RoadmapMonthPoint) {
 	monthlyGrowth := math.Pow(1+a.PriceGrowth, 1.0/12.0)
 
 	existing := float64(stockKRW) // 기존 보유분. 배당은 신규 풀로 빠진다
 	pool := 0.0                   // 신규 풀
 
 	rows := make([]models.RoadmapYearRow, 0, end.Year()-start.Year()+1)
+	months := make([]models.RoadmapMonthPoint, 0, 12*(end.Year()-start.Year()+1))
 	var row *models.RoadmapYearRow
 
 	for m := nextMonthStart(start); !m.After(end); m = m.AddDate(0, 1, 0) {
@@ -78,8 +80,12 @@ func Project(a models.RoadmapAssumptions, stockKRW int64, fx float64, start, end
 		row.AnnualContributionKRW += contribution
 		row.DividendAfterTaxKRW += int64(dividend)
 		row.ProjectedNetWorthKRW = int64(existing + pool + float64(a.OtherAssetsKRW))
+		months = append(months, models.RoadmapMonthPoint{
+			Month:                m.Format("2006-01"),
+			ProjectedNetWorthKRW: row.ProjectedNetWorthKRW,
+		})
 	}
-	return rows
+	return rows, months
 }
 
 // monthlyDividendAfterTax는 기존 보유분에서 그 달에 나오는 세후 배당이다.
@@ -98,7 +104,7 @@ func SolveRequiredGrowth(a models.RoadmapAssumptions, stockKRW int64, fx float64
 	lo, hi := -0.5, 0.5
 	final := func(growth float64) int64 {
 		a.PriceGrowth = growth
-		rows := Project(a, stockKRW, fx, start, by, birthYear)
+		rows, _ := Project(a, stockKRW, fx, start, by, birthYear)
 		if len(rows) == 0 {
 			return 0
 		}

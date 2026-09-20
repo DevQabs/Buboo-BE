@@ -17,7 +17,7 @@ func TestProject_SkipsTheMonthAlreadyReflectedInTodaysNetWorth(t *testing.T) {
 		Contributions: []models.Contribution{{Year: 2026, MonthlyKRW: 2_500_000}},
 	}
 
-	rows := Project(a, 320_000_000, 1386.01, date(2026, time.September, 20), date(2026, time.December, 31), 1992)
+	rows, _ := Project(a, 320_000_000, 1386.01, date(2026, time.September, 20), date(2026, time.December, 31), 1992)
 
 	if want := int64(7_500_000); rows[0].AnnualContributionKRW != want {
 		t.Errorf("3개월치여야 한다: want %v, got %v", want, rows[0].AnnualContributionKRW)
@@ -30,7 +30,7 @@ func TestProject_WithNoGrowthAndNoDividendsSumsTheContributions(t *testing.T) {
 		Contributions:  []models.Contribution{{Year: 2026, MonthlyKRW: 2_500_000}},
 	}
 
-	rows := Project(a, 320_000_000, 1386.01, date(2026, time.October, 1), date(2026, time.December, 31), 1992)
+	rows, _ := Project(a, 320_000_000, 1386.01, date(2026, time.October, 1), date(2026, time.December, 31), 1992)
 
 	if len(rows) != 1 {
 		t.Fatalf("한 해만 굴렸는데 %d행이 나왔다", len(rows))
@@ -50,7 +50,7 @@ func TestProject_WithNoGrowthAndNoDividendsSumsTheContributions(t *testing.T) {
 func TestProject_CompoundsMonthlyNotAnnually(t *testing.T) {
 	a := models.RoadmapAssumptions{PriceGrowth: 0.12}
 
-	rows := Project(a, 100_000_000, 1386.01, date(2026, time.January, 1), date(2026, time.December, 31), 1992)
+	rows, _ := Project(a, 100_000_000, 1386.01, date(2026, time.January, 1), date(2026, time.December, 31), 1992)
 
 	// 월 복리 12회는 연 1회와 같은 결과여야 한다: 1억 × 1.12 = 1.12억
 	got := rows[0].ProjectedNetWorthKRW
@@ -88,7 +88,7 @@ func TestProject_ReinvestsDividendsIntoTheNewPool(t *testing.T) {
 		DividendPlan:    []models.DividendHolding{{Shares: 100, DPS: 10, StartsYear: 2027}},
 	}
 
-	rows := Project(a, 100_000_000, 1000, date(2026, time.January, 1), date(2026, time.December, 31), 1992)
+	rows, _ := Project(a, 100_000_000, 1000, date(2026, time.January, 1), date(2026, time.December, 31), 1992)
 
 	want := int64(100 * 10 * 1000 * (1 - 0.154)) // 846,000
 	if got := rows[0].DividendAfterTaxKRW; got != want {
@@ -121,7 +121,7 @@ func TestSolveRequiredGrowth_FindsTheRateThatHitsTheTarget(t *testing.T) {
 
 	// 역검증: 찾은 상승률로 굴리면 목표액에 닿아야 한다.
 	a.PriceGrowth = growth
-	rows := Project(a, 320_000_000, 1386.01, start, by, 1992)
+	rows, _ := Project(a, 320_000_000, 1386.01, start, by, 1992)
 	final := rows[len(rows)-1].ProjectedNetWorthKRW
 	if diff := final - target; diff > 1_000_000 || diff < -1_000_000 {
 		t.Errorf("상승률 %.4f로 굴린 결과가 목표에서 벗어났다: %v", growth, final)

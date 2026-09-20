@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -228,10 +229,32 @@ func (h *Handler) netWorthParts(r *http.Request) (stockKRW, assetKRW, liabilityK
 		usdKRW = service.FallbackUSDKRW
 	}
 
-	otherAssets, err := h.assetRepo.ListByCouple(ctx, coupleID)
-	if err != nil {
-		return 0, 0, 0, err
+	// 기타 자산과 보유 주식은 서로 무관하다. 원격 DB 왕복이 200ms씩이라
+	// 순서대로 기다릴 이유가 없다.
+	var (
+		otherAssets []models.OtherAsset
+		stocks      []models.StockAsset
+		assetErr    error
+		stockErr    error
+		wg          sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		otherAssets, assetErr = h.assetRepo.ListByCouple(ctx, coupleID)
+	}()
+	go func() {
+		defer wg.Done()
+		stocks, stockErr = h.stockRepo.ListByCouple(ctx, coupleID)
+	}()
+	wg.Wait()
+	if assetErr != nil {
+		return 0, 0, 0, assetErr
 	}
+	if stockErr != nil {
+		return 0, 0, 0, stockErr
+	}
+
 	applyUSDCashRate(otherAssets, usdKRW)
 	for _, a := range otherAssets {
 		if a.IsLiability {
@@ -239,11 +262,6 @@ func (h *Handler) netWorthParts(r *http.Request) (stockKRW, assetKRW, liabilityK
 		} else {
 			assetKRW += a.ValueKRW
 		}
-	}
-
-	stocks, err := h.stockRepo.ListByCouple(ctx, coupleID)
-	if err != nil {
-		return 0, 0, 0, err
 	}
 	symbols := make([]string, 0, len(stocks))
 	for _, s := range stocks {
@@ -276,21 +294,38 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	coupleID := auth.CoupleIDFromCtx(ctx)
 
-	goal, err := h.goalOrDefault(r, coupleID)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	a, err := h.assumptionsOrDefault(r, coupleID, goal.ID)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
+	// 세 갈래는 서로 독립이다. 순서대로 기다리면 원격 DB 왕복이 그대로 더해진다.
+	var (
+		goal                             *models.RoadmapGoal
+		a                                *models.RoadmapAssumptions
+		stockKRW, assetKRW, liabilityKRW int64
+		snapshots                        []models.NetWorthSnapshot
+		goalErr, worthErr, snapErr       error
+		wg                               sync.WaitGroup
+	)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		// 가정은 목표에 딸려 있어 이 둘만 순서가 있다.
+		if goal, goalErr = h.goalOrDefault(r, coupleID); goalErr == nil {
+			a, goalErr = h.assumptionsOrDefault(r, coupleID, goal.ID)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		stockKRW, assetKRW, liabilityKRW, worthErr = h.netWorthParts(r)
+	}()
+	go func() {
+		defer wg.Done()
+		snapshots, snapErr = h.roadmapRepo.ListSnapshots(ctx, coupleID)
+	}()
+	wg.Wait()
 
-	stockKRW, assetKRW, liabilityKRW, err := h.netWorthParts(r)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
+	for _, err := range []error{goalErr, worthErr, snapErr} {
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	// 기타 자산은 저장된 가정이 있으면 그 값을, 없으면 실제 보유분을 쓴다.
 	if a.OtherAssetsKRW == 0 {
@@ -306,14 +341,9 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	growth := service.SolveRequiredGrowth(*a, stockKRW, usdKRW, goal.TargetKRW, now, goal.TargetDate, goal.BirthYear)
 	a.PriceGrowth = growth
-	years := service.Project(*a, stockKRW, usdKRW, now, goal.TargetDate, goal.BirthYear)
+	years, months := service.Project(*a, stockKRW, usdKRW, now, goal.TargetDate, goal.BirthYear)
 
 	// 실적은 그 해 마지막 스냅샷으로 채운다.
-	snapshots, err := h.roadmapRepo.ListSnapshots(ctx, coupleID)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
 	actualByYear := make(map[int]int64, len(snapshots))
 	for _, s := range snapshots {
 		actualByYear[s.SnapshotMonth.Year()] = s.NetWorthKRW // 오래된 순이라 마지막이 남는다
@@ -330,6 +360,29 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 궤적은 다음 달부터 시작한다. 차트가 허공에서 시작하지 않도록 이번 달을
+	// 출발점으로 앞에 붙인다 — 계획과 실적이 같은 지점에서 갈라져 나간다.
+	months = append([]models.RoadmapMonthPoint{{
+		Month:                now.Format("2006-01"),
+		ProjectedNetWorthKRW: netWorthKRW,
+	}}, months...)
+
+	// 월별 실적은 그 달 스냅샷으로 채운다. 이번 달은 스냅샷이 없어도 지금
+	// 순자산을 쓴다.
+	actualByMonth := make(map[string]int64, len(snapshots))
+	for _, s := range snapshots {
+		actualByMonth[s.SnapshotMonth.Format("2006-01")] = s.NetWorthKRW
+	}
+	if _, ok := actualByMonth[now.Format("2006-01")]; !ok {
+		actualByMonth[now.Format("2006-01")] = netWorthKRW
+	}
+	for i := range months {
+		if v, ok := actualByMonth[months[i].Month]; ok {
+			actual := v
+			months[i].ActualNetWorthKRW = &actual
+		}
+	}
+
 	var out models.RoadmapProjection
 	out.Goal.TargetKRW = goal.TargetKRW
 	out.Goal.TargetDate = goal.TargetDate.Format("2006-01-02")
@@ -343,6 +396,7 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 	out.CurrentDividendYield = service.DividendYield(*a, stockKRW, usdKRW, now.Year())
 	out.RequiredTotalReturn = growth + out.CurrentDividendYield
 	out.Years = years
+	out.Months = months
 
 	respondJSON(w, http.StatusOK, out)
 }
