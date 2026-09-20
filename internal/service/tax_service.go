@@ -104,3 +104,22 @@ func LiquidationTax(realizedPnL, unrealizedPnL float64) float64 {
 	realizedOnly := CalcCapitalGainsTax([]UserGain{{RealizedPnL: realizedPnL}})[0].EstimatedTax
 	return both - realizedOnly
 }
+
+// BlendKRWCostBasis는 추가 매수 후의 원화 평단을 낸다.
+//
+// 기존 평단이 손상됐으면 섞지 않고 미상(0)으로 남긴다. 0을 그대로 가중평균에
+// 넣으면 평단이 매수분만큼으로 희석된다 — NU는 평단 0인 203주에 108주를
+// 더해 19,768원이 6,865원이 됐고, 그 뒤 매도에서 7만원 손실이 395만원
+// 이익으로 기록됐다. 미상으로 두면 ValidateKRWCostBasis가 매도를 막는다.
+func BlendKRWCostBasis(oldQty, oldAvgUSD, oldAvgKRW, buyQty, buyPrice, buyFX float64) float64 {
+	newQty := oldQty + buyQty
+	if newQty <= 0 {
+		return 0
+	}
+	if oldQty > 0 {
+		if err := ValidateKRWCostBasis(oldAvgUSD, oldAvgKRW); err != nil {
+			return 0
+		}
+	}
+	return (oldQty*oldAvgKRW + buyQty*buyPrice*buyFX) / newQty
+}

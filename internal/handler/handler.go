@@ -769,7 +769,9 @@ func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 	// KRW weighted-average cost basis (uses exchange rate at time of purchase)
 	var newAvgKRW float64
 	if asset.Currency == "USD" && req.ExchangeRate > 0 {
-		newAvgKRW = (asset.Quantity*asset.AvgKRWPrice + req.Quantity*req.Price*req.ExchangeRate) / newQty
+		newAvgKRW = service.BlendKRWCostBasis(
+			asset.Quantity, asset.AveragePrice, asset.AvgKRWPrice,
+			req.Quantity, req.Price, req.ExchangeRate)
 	} else {
 		newAvgKRW = newAvg
 	}

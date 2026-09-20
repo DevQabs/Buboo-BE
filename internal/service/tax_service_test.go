@@ -177,3 +177,31 @@ func TestLiquidationTax_NetsAgainstARealizedLoss(t *testing.T) {
 		t.Errorf("손실인데 세금이 나왔다: %v", got)
 	}
 }
+
+func TestBlendKRWCostBasis_DoesNotDiluteAgainstAMissingBasis(t *testing.T) {
+	// NU: 평단 0인 203주에 108주를 $13.94 / 환율 1,418.12 로 더한 실제 건.
+	// 섞으면 평단이 19,768원에서 6,865원으로 주저앉아 매도 손익이 뒤집힌다.
+	got := BlendKRWCostBasis(203, 13.9465, 0, 108, 13.94, 1418.12)
+
+	if got != 0 {
+		t.Errorf("손상된 평단을 섞었다: got %v (미상 0 이어야 한다)", got)
+	}
+}
+
+func TestBlendKRWCostBasis_WeightsBothLegsWhenTheBasisIsSound(t *testing.T) {
+	// 100주 @ 20,000원에 100주를 $14 / 환율 1,400 (19,600원) 으로 더한다.
+	got := BlendKRWCostBasis(100, 14.5, 20_000, 100, 14, 1400)
+
+	if want := 19_800.0; got != want {
+		t.Errorf("want %v, got %v", want, got)
+	}
+}
+
+func TestBlendKRWCostBasis_TakesTheBuyLegForANewPosition(t *testing.T) {
+	// 신규 매수는 기존 평단이 없으니 매수분이 그대로 평단이 된다.
+	got := BlendKRWCostBasis(0, 0, 0, 10, 14, 1400)
+
+	if want := 19_600.0; got != want {
+		t.Errorf("want %v, got %v", want, got)
+	}
+}
