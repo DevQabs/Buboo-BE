@@ -128,7 +128,12 @@ func (h *Handler) getRoadmapAssumptions(w http.ResponseWriter, r *http.Request) 
 	}
 	// 배당 계획은 저장값이 아니라 지금 보유 종목에서 만든 것이다. 저장된 옛
 	// 값을 돌려주면 화면이 계산과 다른 숫자를 보게 된다.
-	cands, err := h.dividendCandidates(r.Context(), coupleID, a.DividendSymbols)
+	market, err := h.loadMarket(r.Context(), coupleID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	cands, err := h.dividendCandidates(r.Context(), market, a.DividendSymbols)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -212,11 +217,12 @@ func (h *Handler) postNetWorthSnapshot(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	coupleID := auth.CoupleIDFromCtx(ctx)
 
-	stockKRW, assetKRW, liabilityKRW, err := h.netWorthParts(r)
+	market, err := h.loadMarket(ctx, coupleID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+	stockKRW, assetKRW, liabilityKRW := market.netWorth()
 
 	now := time.Now()
 	snap := &models.NetWorthSnapshot{
@@ -236,104 +242,114 @@ func (h *Handler) postNetWorthSnapshot(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, saved)
 }
 
-// netWorthParts는 현재 순자산을 주식/기타자산/부채로 나눠 낸다.
-func (h *Handler) netWorthParts(r *http.Request) (stockKRW, assetKRW, liabilityKRW int64, err error) {
-	ctx := r.Context()
-	coupleID := auth.CoupleIDFromCtx(ctx)
+// marketView는 한 요청에서 쓰는 시장 데이터다.
+//
+// 순자산과 배당 계획 둘 다 같은 것(환율·보유 종목·시세)을 본다. 각자 읽으면
+// 같은 요청 안에서 DB 왕복이 두 배가 되고, 두 계산이 서로 다른 시점의 값을
+// 볼 수도 있다. 한 번 읽어 돌려쓴다.
+type marketView struct {
+	usdKRW      float64
+	stocks      []models.StockAsset
+	snaps       map[string]models.PriceSnapshot
+	otherAssets []models.OtherAsset
+}
 
-	usdKRW, fxErr := h.priceSvc.FetchUSDKRW(ctx)
-	if fxErr != nil || usdKRW == 0 {
-		usdKRW = service.FallbackUSDKRW
-	}
+// loadMarket은 환율·기타자산·보유주식을 한 번에 읽는다.
+func (h *Handler) loadMarket(ctx context.Context, coupleID string) (*marketView, error) {
+	m := &marketView{}
 
-	// 기타 자산과 보유 주식은 서로 무관하다. 원격 DB 왕복이 200ms씩이라
-	// 순서대로 기다릴 이유가 없다.
+	// 셋 다 서로 무관하다. 원격 DB 왕복이 200ms씩이라 순서대로 기다릴 이유가 없다.
 	var (
-		otherAssets []models.OtherAsset
-		stocks      []models.StockAsset
-		assetErr    error
-		stockErr    error
-		wg          sync.WaitGroup
+		assetErr, stockErr error
+		wg                 sync.WaitGroup
 	)
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		otherAssets, assetErr = h.assetRepo.ListByCouple(ctx, coupleID)
+		usdKRW, err := h.priceSvc.FetchUSDKRW(ctx)
+		if err != nil || usdKRW == 0 {
+			usdKRW = service.FallbackUSDKRW
+		}
+		m.usdKRW = usdKRW
 	}()
 	go func() {
 		defer wg.Done()
-		stocks, stockErr = h.stockRepo.ListByCouple(ctx, coupleID)
+		m.otherAssets, assetErr = h.assetRepo.ListByCouple(ctx, coupleID)
+	}()
+	go func() {
+		defer wg.Done()
+		m.stocks, stockErr = h.stockRepo.ListByCouple(ctx, coupleID)
 	}()
 	wg.Wait()
 	if assetErr != nil {
-		return 0, 0, 0, assetErr
+		return nil, assetErr
 	}
 	if stockErr != nil {
-		return 0, 0, 0, stockErr
+		return nil, stockErr
 	}
 
-	applyUSDCashRate(otherAssets, usdKRW)
-	for _, a := range otherAssets {
+	symbols := make([]string, 0, len(m.stocks))
+	seen := make(map[string]bool, len(m.stocks))
+	for _, s := range m.stocks {
+		if !seen[s.Symbol] {
+			seen[s.Symbol] = true
+			symbols = append(symbols, s.Symbol)
+		}
+	}
+	snaps, err := h.stockRepo.ListPriceSnapshots(ctx, symbols)
+	if err != nil {
+		return nil, err
+	}
+	m.snaps = snaps
+	return m, nil
+}
+
+// netWorth는 순자산을 주식/기타자산/부채로 나눠 낸다.
+func (m *marketView) netWorth() (stockKRW, assetKRW, liabilityKRW int64) {
+	applyUSDCashRate(m.otherAssets, m.usdKRW)
+	for _, a := range m.otherAssets {
 		if a.IsLiability {
 			liabilityKRW += a.ValueKRW
 		} else {
 			assetKRW += a.ValueKRW
 		}
 	}
-	symbols := make([]string, 0, len(stocks))
-	for _, s := range stocks {
-		symbols = append(symbols, s.Symbol)
-	}
-	snaps, err := h.stockRepo.ListPriceSnapshots(ctx, symbols)
-	if err != nil {
-		return 0, 0, 0, err
-	}
 	var stockValue float64
-	for _, s := range stocks {
-		snap, ok := snaps[s.Symbol]
+	for _, s := range m.stocks {
+		snap, ok := m.snaps[s.Symbol]
 		if !ok {
 			continue
 		}
 		val := snap.Price * s.Quantity
 		if strings.ToUpper(s.Currency) == "USD" {
-			val *= usdKRW
+			val *= m.usdKRW
 		}
 		stockValue += val
 	}
-	return int64(stockValue), assetKRW, liabilityKRW, nil
+	return int64(stockValue), assetKRW, liabilityKRW
 }
 
 // dividendCandidates는 보유 종목마다 배당 이력을 붙여 돌려준다.
 //
 // 저장된 계획을 쓰지 않는 이유는 금방 낡기 때문이다. 주식을 사고팔면 주식수가
-// 달라지고 배당도 매년 인상된다. 주식수는 stock_assets 에서, 배당은 야후에서
-// 조회할 때마다 새로 읽는다.
-func (h *Handler) dividendCandidates(ctx context.Context, coupleID string, selected []string) ([]models.DividendCandidate, error) {
-	stocks, err := h.stockRepo.ListByCouple(ctx, coupleID)
-	if err != nil {
-		return nil, err
-	}
-
+// 달라지고 배당도 매년 인상된다. 주식수와 시세는 marketView 에서, 배당 이력은
+// 야후에서 조회할 때마다 새로 읽는다.
+func (h *Handler) dividendCandidates(ctx context.Context, m *marketView, selected []string) ([]models.DividendCandidate, error) {
 	// 같은 종목을 둘이 나눠 갖고 있으므로 주식수를 합친다.
 	type holding struct {
 		exchange string
 		shares   float64
 	}
-	merged := make(map[string]holding, len(stocks))
-	symbols := make([]string, 0, len(stocks))
-	for _, s := range stocks {
+	merged := make(map[string]holding, len(m.stocks))
+	symbols := make([]string, 0, len(m.stocks))
+	for _, s := range m.stocks {
 		if _, ok := merged[s.Symbol]; !ok {
 			symbols = append(symbols, s.Symbol)
 		}
-		m := merged[s.Symbol]
-		m.exchange = s.Exchange
-		m.shares += s.Quantity
-		merged[s.Symbol] = m
-	}
-
-	snaps, err := h.stockRepo.ListPriceSnapshots(ctx, symbols)
-	if err != nil {
-		return nil, err
+		hold := merged[s.Symbol]
+		hold.exchange = s.Exchange
+		hold.shares += s.Quantity
+		merged[s.Symbol] = hold
 	}
 
 	chosen := make(map[string]bool, len(selected))
@@ -355,7 +371,7 @@ func (h *Handler) dividendCandidates(ctx context.Context, coupleID string, selec
 			if err != nil || hist == nil || hist.AnnualPS <= 0 {
 				return // 배당 없는 종목이거나 조회 실패
 			}
-			snap, ok := snaps[sym]
+			snap, ok := m.snaps[sym]
 			if !ok || snap.Price <= 0 {
 				return
 			}
@@ -412,18 +428,18 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	coupleID := auth.CoupleIDFromCtx(ctx)
 
-	// 세 갈래는 서로 독립이다. 순서대로 기다리면 원격 DB 왕복이 그대로 더해진다.
+	// 환율·보유 종목·시세는 한 번만 읽어 순자산과 배당 계획이 함께 쓴다.
+	// 목표·가정, 실적 스냅샷은 그와 무관하니 같이 읽는다.
 	var (
-		goal                             *models.RoadmapGoal
-		a                                *models.RoadmapAssumptions
-		stockKRW, assetKRW, liabilityKRW int64
-		snapshots                        []models.NetWorthSnapshot
-		divCands                         []models.DividendCandidate
-		goalErr, worthErr, snapErr       error
-		divErr                           error
-		wg                               sync.WaitGroup
+		goal            *models.RoadmapGoal
+		a               *models.RoadmapAssumptions
+		market          *marketView
+		snapshots       []models.NetWorthSnapshot
+		goalErr, mktErr error
+		snapErr         error
+		wg              sync.WaitGroup
 	)
-	wg.Add(4)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		// 가정은 목표에 딸려 있어 이 둘만 순서가 있다.
@@ -433,32 +449,26 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 	}()
 	go func() {
 		defer wg.Done()
-		stockKRW, assetKRW, liabilityKRW, worthErr = h.netWorthParts(r)
+		market, mktErr = h.loadMarket(ctx, coupleID)
 	}()
 	go func() {
 		defer wg.Done()
 		snapshots, snapErr = h.roadmapRepo.ListSnapshots(ctx, coupleID)
 	}()
-	go func() {
-		defer wg.Done()
-		// 저장된 가정을 아직 못 읽었으므로 선택 목록은 여기서 따로 읽는다.
-		var stored *models.RoadmapAssumptions
-		if g, err := h.roadmapRepo.ActiveGoal(ctx, coupleID); err == nil && g != nil {
-			stored, _ = h.roadmapRepo.Assumptions(ctx, g.ID)
-		}
-		var selected []string
-		if stored != nil {
-			selected = stored.DividendSymbols
-		}
-		divCands, divErr = h.dividendCandidates(ctx, coupleID, selected)
-	}()
 	wg.Wait()
 
-	for _, err := range []error{goalErr, worthErr, snapErr, divErr} {
+	for _, err := range []error{goalErr, mktErr, snapErr} {
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err)
 			return
 		}
+	}
+
+	stockKRW, assetKRW, liabilityKRW := market.netWorth()
+	divCands, err := h.dividendCandidates(ctx, market, a.DividendSymbols)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
 	}
 	// 배당 계획은 저장값이 아니라 지금 보유 종목에서 만든 것을 쓴다.
 	a.DividendPlan = dividendPlanFrom(divCands)
@@ -469,10 +479,7 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 	}
 	netWorthKRW := stockKRW + a.OtherAssetsKRW
 
-	usdKRW, fxErr := h.priceSvc.FetchUSDKRW(ctx)
-	if fxErr != nil || usdKRW == 0 {
-		usdKRW = service.FallbackUSDKRW
-	}
+	usdKRW := market.usdKRW
 
 	now := time.Now().UTC()
 	growth := service.SolveRequiredGrowth(*a, stockKRW, usdKRW, goal.TargetKRW, now, goal.TargetDate, goal.BirthYear)
