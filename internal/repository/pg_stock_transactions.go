@@ -117,22 +117,48 @@ func (r *PgStockTransactionRepository) AnnualSummary(ctx context.Context, couple
 	}
 	defer rows.Close()
 
-	const taxRate = 0.22
-	var result []models.SymbolTaxSummary
+	// 종목별 세액은 계산하지 않는다. 양도소득세는 사람 단위로 손익을 통산한
+	// 뒤 기본공제를 적용해 매기므로, 종목 하나만 떼어 22%를 곱한 값은 실제
+	// 세액과 무관하다. 세액은 AnnualGainsByUser + service.CalcCapitalGainsTax 몫이다.
+	result := []models.SymbolTaxSummary{}
 	for rows.Next() {
 		var s models.SymbolTaxSummary
 		if err := rows.Scan(&s.Symbol, &s.Exchange, &s.SellCount, &s.RealizedPnL); err != nil {
 			return nil, err
 		}
-		taxable := s.RealizedPnL
-		if taxable < 0 {
-			taxable = 0
-		}
-		s.EstimatedTax = taxable * taxRate
 		result = append(result, s)
 	}
-	if result == nil {
-		result = []models.SymbolTaxSummary{}
+	return result, rows.Err()
+}
+
+// AnnualGainsByUser nets realized P&L per person for the given year.
+// GROUP BY user_id 가 한 사람 안에서 종목 간 손익을 통산한다 — 손실 종목이
+// 이익 종목을 상계하는 것이 실제 과세 방식이다.
+func (r *PgStockTransactionRepository) AnnualGainsByUser(ctx context.Context, coupleID string, year int) ([]models.UserGainRow, error) {
+	start := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(1, 0, 0)
+	rows, err := r.db.Query(ctx,
+		`SELECT user_id,
+		        COUNT(*) AS sell_count,
+		        SUM(realized_pnl) AS realized_pnl
+		 FROM stock_transactions
+		 WHERE couple_id=$1 AND type='sell'
+		   AND executed_at >= $2 AND executed_at < $3
+		 GROUP BY user_id
+		 ORDER BY user_id`,
+		coupleID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []models.UserGainRow{}
+	for rows.Next() {
+		var g models.UserGainRow
+		if err := rows.Scan(&g.UserID, &g.SellCount, &g.RealizedPnL); err != nil {
+			return nil, err
+		}
+		result = append(result, g)
 	}
 	return result, rows.Err()
 }

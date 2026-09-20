@@ -928,30 +928,48 @@ func (h *Handler) annualTax(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	bySymbol, err := h.stxRepo.AnnualSummary(r.Context(), auth.CoupleIDFromCtx(r.Context()), year)
+	coupleID := auth.CoupleIDFromCtx(r.Context())
+	bySymbol, err := h.stxRepo.AnnualSummary(r.Context(), coupleID, year)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	gains, err := h.stxRepo.AnnualGainsByUser(r.Context(), coupleID, year)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	const taxRate = 0.22
-	var totalPnL float64
-	for _, s := range bySymbol {
-		totalPnL += s.RealizedPnL
+	// 사람별로 손익을 통산하고 각자 250만원을 공제한 뒤 세액을 구한다.
+	input := make([]service.UserGain, 0, len(gains))
+	sellCounts := make(map[string]int, len(gains))
+	for _, g := range gains {
+		input = append(input, service.UserGain{UserID: g.UserID, RealizedPnL: g.RealizedPnL})
+		sellCounts[g.UserID] = g.SellCount
 	}
-	taxable := totalPnL
-	if taxable < 0 {
-		taxable = 0
-	}
+
+	byUser := make([]models.UserTaxSummary, 0, len(gains))
 	summary := models.AnnualTaxSummary{
-		Year:             year,
-		CoupleID:         auth.CoupleIDFromCtx(r.Context()),
-		TotalRealizedPnL: totalPnL,
-		TaxableGain:      taxable,
-		EstimatedTax:     taxable * taxRate,
-		TaxRate:          taxRate,
-		BySymbol:         bySymbol,
+		Year:     year,
+		CoupleID: coupleID,
+		TaxRate:  service.CapitalGainsTaxRate,
+		BySymbol: bySymbol,
 	}
+	for _, t := range service.CalcCapitalGainsTax(input) {
+		byUser = append(byUser, models.UserTaxSummary{
+			UserID:       t.UserID,
+			SellCount:    sellCounts[t.UserID],
+			RealizedPnL:  t.RealizedPnL,
+			Deduction:    t.Deduction,
+			TaxableGain:  t.TaxableGain,
+			EstimatedTax: t.EstimatedTax,
+		})
+		summary.TotalRealizedPnL += t.RealizedPnL
+		summary.TotalDeduction += t.Deduction
+		summary.TaxableGain += t.TaxableGain
+		summary.EstimatedTax += t.EstimatedTax
+	}
+	summary.ByUser = byUser
 	respondJSON(w, http.StatusOK, summary)
 }
 

@@ -175,6 +175,10 @@ type StockTransactionRepository interface {
 
 	// AnnualSummary computes realized P&L grouped by symbol for a given year.
 	AnnualSummary(ctx context.Context, coupleID string, year int) ([]models.SymbolTaxSummary, error)
+
+	// AnnualGainsByUser nets realized P&L per person for a given year.
+	// 양도소득세는 인별 과세이므로 기본공제 250만원도 사람마다 따로 적용된다.
+	AnnualGainsByUser(ctx context.Context, coupleID string, year int) ([]models.UserGainRow, error)
 }
 
 // ─────────────────────────────────────────────

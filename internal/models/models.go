@@ -392,24 +392,47 @@ type TaxCheckResponse struct {
 }
 
 // AnnualTaxSummary is computed on-the-fly from stock_transactions.
-// US 22% self-reporting basis (해외주식 양도소득세).
+// 해외주식 양도소득세(22%, 지방소득세 포함) 기준이다.
+//
+// 세액은 사람별로 계산한 뒤 합산한다. 양도소득세는 인별 과세이고 기본공제
+// 250만원도 각자 적용되므로, 부부 합계 손익에 공제를 한 번만 적용하면
+// 세금이 과대계상된다. 내역은 ByUser를 볼 것.
 type AnnualTaxSummary struct {
 	Year             int                `json:"year"`
 	CoupleID         string             `json:"couple_id"`
-	TotalRealizedPnL float64            `json:"total_realized_pnl"` // USD
-	TaxableGain      float64            `json:"taxable_gain"`       // max(0, total_realized_pnl)
-	EstimatedTax     float64            `json:"estimated_tax"`      // taxable_gain * 0.22
+	TotalRealizedPnL float64            `json:"total_realized_pnl"` // KRW, 부부 합계
+	TotalDeduction   float64            `json:"total_deduction"`    // 적용된 기본공제 합계
+	TaxableGain      float64            `json:"taxable_gain"`       // 인별 과세표준의 합
+	EstimatedTax     float64            `json:"estimated_tax"`      // 인별 세액의 합
 	TaxRate          float64            `json:"tax_rate"`           // 0.22
+	ByUser           []UserTaxSummary   `json:"by_user"`
 	BySymbol         []SymbolTaxSummary `json:"by_symbol"`
 }
 
-// SymbolTaxSummary aggregates realized P&L for a single symbol in a given year.
-type SymbolTaxSummary struct {
-	Symbol       string  `json:"symbol"`
-	Exchange     string  `json:"exchange"`
+// UserTaxSummary는 한 사람의 연간 양도소득세 내역이다.
+type UserTaxSummary struct {
+	UserID       string  `json:"user_id"`
 	SellCount    int     `json:"sell_count"`
-	RealizedPnL  float64 `json:"realized_pnl"`  // USD
-	EstimatedTax float64 `json:"estimated_tax"` // max(0, realized_pnl) * 0.22
+	RealizedPnL  float64 `json:"realized_pnl"`  // KRW, 종목 간 손익 통산 후
+	Deduction    float64 `json:"deduction"`     // 실제 적용된 기본공제 (최대 250만원)
+	TaxableGain  float64 `json:"taxable_gain"`  // max(0, realized_pnl - deduction)
+	EstimatedTax float64 `json:"estimated_tax"` // taxable_gain * 0.22
+}
+
+// UserGainRow는 저장소가 반환하는 사람별 연간 실현손익 집계다.
+type UserGainRow struct {
+	UserID      string
+	SellCount   int
+	RealizedPnL float64 // KRW
+}
+
+// SymbolTaxSummary aggregates realized P&L for a single symbol in a given year.
+// 세액 필드는 없다 — 세금은 종목이 아니라 사람 단위로 매겨진다.
+type SymbolTaxSummary struct {
+	Symbol      string  `json:"symbol"`
+	Exchange    string  `json:"exchange"`
+	SellCount   int     `json:"sell_count"`
+	RealizedPnL float64 `json:"realized_pnl"` // KRW
 }
 
 // ─────────────────────────────────────────────
