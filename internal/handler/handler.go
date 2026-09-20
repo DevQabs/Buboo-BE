@@ -767,8 +767,17 @@ func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 	newAvg := (asset.Quantity*asset.AveragePrice + req.Quantity*req.Price) / newQty
 
 	// KRW weighted-average cost basis (uses exchange rate at time of purchase)
+	//
+	// USD 매수는 환율이 있어야 원화 평단을 낼 수 있다. 환율 없이 달러 평단을
+	// 원화 칼럼에 넣으면 평단이 1,400분의 1로 기록된다 — MCD는 2026-06-08
+	// 환율 0 매수로 277원이 원화 평단이 됐고, 이후 매수와 섞여 18,620원으로
+	// 굳은 뒤 매도가 +72.6만원 이익으로 뒤집혔다.
 	var newAvgKRW float64
-	if asset.Currency == "USD" && req.ExchangeRate > 0 {
+	if asset.Currency == "USD" {
+		if req.ExchangeRate <= 0 {
+			respondError(w, http.StatusBadRequest, fmt.Errorf("매수 환율이 필요합니다"))
+			return
+		}
 		newAvgKRW = service.BlendKRWCostBasis(
 			asset.Quantity, asset.AveragePrice, asset.AvgKRWPrice,
 			req.Quantity, req.Price, req.ExchangeRate)
