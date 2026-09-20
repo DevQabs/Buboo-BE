@@ -57,7 +57,7 @@ func Project(a models.RoadmapAssumptions, stockKRW int64, fx float64, start, end
 	rows := make([]models.RoadmapYearRow, 0, end.Year()-start.Year()+1)
 	var row *models.RoadmapYearRow
 
-	for m := firstOfMonth(start); !m.After(end); m = m.AddDate(0, 1, 0) {
+	for m := nextMonthStart(start); !m.After(end); m = m.AddDate(0, 1, 0) {
 		year := m.Year()
 		if row == nil || row.Year != year {
 			rows = append(rows, models.RoadmapYearRow{
@@ -121,8 +121,17 @@ func SolveRequiredGrowth(a models.RoadmapAssumptions, stockKRW int64, fx float64
 	return (lo + hi) / 2
 }
 
-func firstOfMonth(t time.Time) time.Time {
-	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
+// nextMonthStart는 굴리기 시작할 달의 1일이다.
+//
+// 시작일이 달 중간이면 그 달은 건너뛴다. 이번 달의 적립과 배당은 이미 지금
+// 순자산에 반영돼 있어서, 다시 더하면 두 번 계산된다. 9월 20일에 열면
+// 2026년은 10~12월 세 달만 굴린다.
+func nextMonthStart(t time.Time) time.Time {
+	first := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
+	if t.Equal(first) {
+		return first
+	}
+	return first.AddDate(0, 1, 0)
 }
 
 // DividendYield는 기존 보유분의 세후 배당수익률이다. 필요 수익률을 가격상승률과

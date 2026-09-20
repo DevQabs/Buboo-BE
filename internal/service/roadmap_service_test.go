@@ -11,6 +11,19 @@ func date(y int, m time.Month, d int) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 
+func TestProject_SkipsTheMonthAlreadyReflectedInTodaysNetWorth(t *testing.T) {
+	// 9월 20일에 열면 9월 적립은 이미 지금 순자산에 들어 있다. 10~12월만 굴려야 한다.
+	a := models.RoadmapAssumptions{
+		Contributions: []models.Contribution{{Year: 2026, MonthlyKRW: 2_500_000}},
+	}
+
+	rows := Project(a, 320_000_000, 1386.01, date(2026, time.September, 20), date(2026, time.December, 31), 1992)
+
+	if want := int64(7_500_000); rows[0].AnnualContributionKRW != want {
+		t.Errorf("3개월치여야 한다: want %v, got %v", want, rows[0].AnnualContributionKRW)
+	}
+}
+
 func TestProject_WithNoGrowthAndNoDividendsSumsTheContributions(t *testing.T) {
 	a := models.RoadmapAssumptions{
 		OtherAssetsKRW: 95_000_000,
