@@ -82,6 +82,8 @@ func Project(a models.RoadmapAssumptions, stockKRW int64, fx float64, start, end
 		row.ProjectedNetWorthKRW = int64(existing + pool + float64(a.OtherAssetsKRW))
 		months = append(months, models.RoadmapMonthPoint{
 			Month:                m.Format("2006-01"),
+			ContributionKRW:      contribution,
+			DividendAfterTaxKRW:  int64(dividend),
 			ProjectedNetWorthKRW: row.ProjectedNetWorthKRW,
 		})
 	}

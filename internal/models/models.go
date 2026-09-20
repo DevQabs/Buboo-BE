@@ -904,6 +904,8 @@ type DividendCandidate struct {
 // 적립이 실제로 어떻게 쌓이는지 보려면 월 단위가 필요하다.
 type RoadmapMonthPoint struct {
 	Month                string `json:"month"` // YYYY-MM
+	ContributionKRW      int64  `json:"contribution_krw"`
+	DividendAfterTaxKRW  int64  `json:"dividend_after_tax_krw"`
 	ProjectedNetWorthKRW int64  `json:"projected_net_worth_krw"`
 	ActualNetWorthKRW    *int64 `json:"actual_net_worth_krw"`
 }
