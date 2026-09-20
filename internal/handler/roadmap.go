@@ -209,6 +209,19 @@ func (h *Handler) ensureGoal(r *http.Request, coupleID string) (*models.RoadmapG
 	return h.roadmapRepo.UpsertGoal(r.Context(), &g)
 }
 
+// newSnapshot은 이번 달 실적 한 건을 만든다. 같은 달은 덮어쓴다.
+func newSnapshot(coupleID string, stockKRW, assetKRW, liabilityKRW int64, now time.Time) *models.NetWorthSnapshot {
+	return &models.NetWorthSnapshot{
+		ID:            uuid.NewString(),
+		CoupleID:      coupleID,
+		SnapshotMonth: time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC),
+		StockKRW:      stockKRW,
+		AssetKRW:      assetKRW,
+		LiabilityKRW:  liabilityKRW,
+		NetWorthKRW:   stockKRW + assetKRW - liabilityKRW,
+	}
+}
+
 // postNetWorthSnapshot — POST /api/roadmap/snapshot
 //
 // 이번 달 순자산을 적재한다. 값은 wealth 탭이 쓰는 것과 같은 경로로 구한다.
@@ -224,16 +237,7 @@ func (h *Handler) postNetWorthSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	stockKRW, assetKRW, liabilityKRW := market.netWorth()
 
-	now := time.Now()
-	snap := &models.NetWorthSnapshot{
-		ID:            uuid.NewString(),
-		CoupleID:      coupleID,
-		SnapshotMonth: time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC),
-		StockKRW:      stockKRW,
-		AssetKRW:      assetKRW,
-		LiabilityKRW:  liabilityKRW,
-		NetWorthKRW:   stockKRW + assetKRW - liabilityKRW,
-	}
+	snap := newSnapshot(coupleID, stockKRW, assetKRW, liabilityKRW, time.Now())
 	saved, err := h.roadmapRepo.UpsertSnapshot(ctx, snap)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
@@ -490,6 +494,20 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 	usdKRW := market.usdKRW
 
 	now := time.Now().UTC()
+
+	// 이번 달 실적을 남긴다. 조회할 때마다 덮어쓰므로 그 달에 마지막으로 연
+	// 시점의 값이 기록되고, 달이 지나면 그 값으로 굳는다. 기록할 곳이 없으면
+	// 지난 달들의 실적이 영영 빈칸으로 남는다.
+	//
+	// 응답을 늦추지 않으려고 뒤에서 처리한다. 요청 컨텍스트는 응답과 함께
+	// 끊기므로 쓰지 않는다.
+	go func(snap *models.NetWorthSnapshot) {
+		bg, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := h.roadmapRepo.UpsertSnapshot(bg, snap); err != nil {
+			fmt.Printf("warn: 순자산 스냅샷 적재 실패: %v\n", err)
+		}
+	}(newSnapshot(coupleID, stockKRW, assetKRW, liabilityKRW, now))
 	growth := service.SolveRequiredGrowth(*a, stockKRW, usdKRW, goal.TargetKRW, now, goal.TargetDate, goal.BirthYear)
 	a.PriceGrowth = growth
 	years, months := service.Project(*a, stockKRW, usdKRW, now, goal.TargetDate, goal.BirthYear)
