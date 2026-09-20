@@ -245,10 +245,18 @@ func (h *Handler) netWorthParts(r *http.Request) (stockKRW, assetKRW, liabilityK
 	if err != nil {
 		return 0, 0, 0, err
 	}
+	symbols := make([]string, 0, len(stocks))
+	for _, s := range stocks {
+		symbols = append(symbols, s.Symbol)
+	}
+	snaps, err := h.stockRepo.ListPriceSnapshots(ctx, symbols)
+	if err != nil {
+		return 0, 0, 0, err
+	}
 	var stockValue float64
 	for _, s := range stocks {
-		snap, _ := h.stockRepo.GetPriceSnapshot(ctx, s.Symbol)
-		if snap == nil {
+		snap, ok := snaps[s.Symbol]
+		if !ok {
 			continue
 		}
 		val := snap.Price * s.Quantity
@@ -309,6 +317,11 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 	actualByYear := make(map[int]int64, len(snapshots))
 	for _, s := range snapshots {
 		actualByYear[s.SnapshotMonth.Year()] = s.NetWorthKRW // 오래된 순이라 마지막이 남는다
+	}
+	// 올해는 스냅샷이 없어도 지금 순자산을 실적으로 본다. 그래야 화면에서
+	// 계획선과 실적선이 첫날부터 두 줄로 보인다.
+	if _, ok := actualByYear[now.Year()]; !ok {
+		actualByYear[now.Year()] = netWorthKRW
 	}
 	for i := range years {
 		if v, ok := actualByYear[years[i].Year]; ok {

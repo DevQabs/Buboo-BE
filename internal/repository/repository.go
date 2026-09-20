@@ -83,6 +83,9 @@ type StockRepository interface {
 	// In MVP this reads from stocks.json; later it calls a real price API.
 	GetPriceSnapshot(ctx context.Context, symbol string) (*models.PriceSnapshot, error)
 
+	// ListPriceSnapshots fetches many symbols in one query.
+	ListPriceSnapshots(ctx context.Context, symbols []string) (map[string]models.PriceSnapshot, error)
+
 	// UpsertPriceSnapshot saves or updates a price snapshot.
 	UpsertPriceSnapshot(ctx context.Context, snap *models.PriceSnapshot) error
 }

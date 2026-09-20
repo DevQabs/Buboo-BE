@@ -165,6 +165,32 @@ func (r *PgStockRepository) GetPriceSnapshot(ctx context.Context, symbol string)
 	return &s, nil
 }
 
+// ListPriceSnapshots는 여러 종목의 시세를 한 번에 가져온다. 종목마다
+// GetPriceSnapshot 을 부르면 보유 종목 수만큼 왕복이 생긴다 — 9종목이면
+// 원격 DB 기준 2초가 넘는다.
+func (r *PgStockRepository) ListPriceSnapshots(ctx context.Context, symbols []string) (map[string]models.PriceSnapshot, error) {
+	out := make(map[string]models.PriceSnapshot, len(symbols))
+	if len(symbols) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx,
+		`SELECT symbol, exchange, price, currency, change, change_percent, snapshotted_at
+		 FROM price_snapshots WHERE symbol = ANY($1)`, symbols)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s models.PriceSnapshot
+		if err := rows.Scan(&s.Symbol, &s.Exchange, &s.Price, &s.Currency,
+			&s.Change, &s.ChangePercent, &s.SnapshottedAt); err != nil {
+			return nil, err
+		}
+		out[s.Symbol] = s
+	}
+	return out, rows.Err()
+}
+
 func (r *PgStockRepository) UpsertPriceSnapshot(ctx context.Context, snap *models.PriceSnapshot) error {
 	_, err := r.db.Exec(ctx,
 		`INSERT INTO price_snapshots (symbol, exchange, price, currency, change, change_percent, snapshotted_at)

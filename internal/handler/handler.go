@@ -174,7 +174,7 @@ func (h *Handler) NewRouter() chi.Router {
 			r.Get("/portfolio", h.portfolio)
 			r.Get("/exchange-rate", h.exchangeRate)
 			r.Post("/refresh", h.refreshPrices)
-			r.Get("/tax", h.annualTax)           // GET /api/stocks/tax?year=2026
+			r.Get("/tax", h.annualTax)                      // GET /api/stocks/tax?year=2026
 			r.Get("/transactions", h.listStockTransactions) // GET /api/stocks/transactions
 			// Must be registered BEFORE /{id} to avoid routing conflict
 			r.Patch("/reorder", h.reorderStocks) // PATCH /api/stocks/reorder
@@ -182,15 +182,15 @@ func (h *Handler) NewRouter() chi.Router {
 				r.Get("/", h.getStock)
 				r.Put("/", h.updateStock)
 				r.Delete("/", h.deleteStock)
-				r.Post("/buy", h.buyStock)        // 매수
-				r.Post("/sell", h.sellStock)      // 매도
-				r.Get("/tax-check", h.taxCheck)   // 삭제 전 경고 여부 확인
+				r.Post("/buy", h.buyStock)      // 매수
+				r.Post("/sell", h.sellStock)    // 매도
+				r.Get("/tax-check", h.taxCheck) // 삭제 전 경고 여부 확인
 			})
 		})
 
 		// Roadmap (목표 순자산 플랜)
 		r.Route("/roadmap", func(r chi.Router) {
-			r.Get("/projection", h.roadmapProjection)  // 화면 전체 데이터
+			r.Get("/projection", h.roadmapProjection) // 화면 전체 데이터
 			r.Get("/goal", h.getRoadmapGoal)
 			r.Put("/goal", h.putRoadmapGoal)
 			r.Get("/assumptions", h.getRoadmapAssumptions)
@@ -200,27 +200,27 @@ func (h *Handler) NewRouter() chi.Router {
 
 		// Other Assets (부동산, 예금, 가상화폐, 차량 등)
 		r.Route("/assets", func(r chi.Router) {
-			r.Get("/", h.listAssets)           // 전체 목록 (type 쿼리 파라미터로 필터)
-			r.Post("/", h.createAsset)          // 자산 추가
-			r.Get("/net-worth", h.netWorth)     // 순자산 요약 (주식 + 기타)
+			r.Get("/", h.listAssets)        // 전체 목록 (type 쿼리 파라미터로 필터)
+			r.Post("/", h.createAsset)      // 자산 추가
+			r.Get("/net-worth", h.netWorth) // 순자산 요약 (주식 + 기타)
 			// Must be registered BEFORE /{id} to avoid routing conflict
 			r.Patch("/reorder", h.reorderAssets) // PATCH /api/assets/reorder
 			r.Route("/{id}", func(r chi.Router) {
-				r.Get("/", h.getAsset)          // 단건 조회
-				r.Put("/", h.updateAsset)       // 수정 (partial update)
-				r.Delete("/", h.deleteAsset)    // 삭제
+				r.Get("/", h.getAsset)                            // 단건 조회
+				r.Put("/", h.updateAsset)                         // 수정 (partial update)
+				r.Delete("/", h.deleteAsset)                      // 삭제
 				r.Post("/loan-expense", h.createLoanFixedExpense) // 대출 → 고정비 생성
 			})
 		})
 
 		// Dividends (배당 이벤트)
 		r.Route("/dividends", func(r chi.Router) {
-			r.Get("/", h.listDividends)              // 전체 목록
-			r.Post("/", h.createDividend)            // 배당 이벤트 등록
-			r.Get("/summary", h.dividendSummary)     // 연간 요약 (?year=)
+			r.Get("/", h.listDividends)          // 전체 목록
+			r.Post("/", h.createDividend)        // 배당 이벤트 등록
+			r.Get("/summary", h.dividendSummary) // 연간 요약 (?year=)
 			r.Route("/{id}", func(r chi.Router) {
-				r.Delete("/", h.deleteDividend)      // 삭제
-				r.Post("/apply", h.applyDividend)    // 가계부 수입 반영
+				r.Delete("/", h.deleteDividend)   // 삭제
+				r.Post("/apply", h.applyDividend) // 가계부 수입 반영
 			})
 		})
 
@@ -419,10 +419,14 @@ func (h *Handler) calendarSummary(w http.ResponseWriter, r *http.Request) {
 	year := now.Year()
 	month := int(now.Month())
 	if y := q.Get("year"); y != "" {
-		if v, err := strconv.Atoi(y); err == nil { year = v }
+		if v, err := strconv.Atoi(y); err == nil {
+			year = v
+		}
 	}
 	if m := q.Get("month"); m != "" {
-		if v, err := strconv.Atoi(m); err == nil { month = v }
+		if v, err := strconv.Atoi(m); err == nil {
+			month = v
+		}
 	}
 
 	// ── 1. Aggregate transactions by date (GROUP BY equivalent) ──────────────
@@ -719,9 +723,9 @@ func (h *Handler) deleteStock(w http.ResponseWriter, r *http.Request) {
 		if hasSell {
 			// 409 signals the frontend to show the tax-warning modal
 			respondJSON(w, http.StatusConflict, map[string]interface{}{
-				"tax_warning":          true,
+				"tax_warning":           true,
 				"has_sell_current_year": true,
-				"year":                 time.Now().Year(),
+				"year":                  time.Now().Year(),
 			})
 			return
 		}
@@ -911,9 +915,9 @@ func (h *Handler) sellStock(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		respondJSON(w, http.StatusOK, map[string]interface{}{
-			"removed":       true,
-			"realized_pnl":  realizedPnL,
-			"symbol":        asset.Symbol,
+			"removed":      true,
+			"realized_pnl": realizedPnL,
+			"symbol":       asset.Symbol,
 		})
 		return
 	}
@@ -1050,7 +1054,7 @@ func (h *Handler) portfolio(w http.ResponseWriter, r *http.Request) {
 	// ── 3. Enrich each holding with live price ────────────────────────────────
 	items := make([]models.StockAssetWithPrice, 0, len(assets))
 	var totalValueKRW, totalCostKRW float64
-	var krwBasisApprox int // 원화 취득가가 손상돼 오늘 환율로 근사한 종목 수
+	var krwBasisApprox int                       // 원화 취득가가 손상돼 오늘 환율로 근사한 종목 수
 	unrealizedByUser := make(map[string]float64) // 사람별 미실현 손익 (해외주식, KRW)
 
 	for _, a := range assets {
@@ -1581,10 +1585,15 @@ func (h *Handler) netWorth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stocks, _ := h.stockRepo.ListByCouple(ctx, auth.CoupleIDFromCtx(r.Context()))
+	symbols := make([]string, 0, len(stocks))
+	for _, s := range stocks {
+		symbols = append(symbols, s.Symbol)
+	}
+	snaps, _ := h.stockRepo.ListPriceSnapshots(ctx, symbols)
 	var stockValueKRW float64
 	for _, s := range stocks {
-		snap, _ := h.stockRepo.GetPriceSnapshot(ctx, s.Symbol)
-		if snap == nil {
+		snap, ok := snaps[s.Symbol]
+		if !ok {
 			continue
 		}
 		val := snap.Price * s.Quantity
@@ -1868,12 +1877,24 @@ func (h *Handler) updateFixedExpense(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
 		return
 	}
-	if req.Owner != nil      { existing.Owner = *req.Owner }
-	if req.Kind != nil       { existing.Kind = *req.Kind }
-	if req.Title != nil      { existing.Title = *req.Title }
-	if req.Category != nil   { existing.Category = *req.Category }
-	if req.Amount != nil     { existing.Amount = *req.Amount }
-	if req.DayOfMonth != nil { existing.DayOfMonth = *req.DayOfMonth }
+	if req.Owner != nil {
+		existing.Owner = *req.Owner
+	}
+	if req.Kind != nil {
+		existing.Kind = *req.Kind
+	}
+	if req.Title != nil {
+		existing.Title = *req.Title
+	}
+	if req.Category != nil {
+		existing.Category = *req.Category
+	}
+	if req.Amount != nil {
+		existing.Amount = *req.Amount
+	}
+	if req.DayOfMonth != nil {
+		existing.DayOfMonth = *req.DayOfMonth
+	}
 	if req.IsActive != nil {
 		wasActive := existing.IsActive
 		existing.IsActive = *req.IsActive
@@ -1884,8 +1905,12 @@ func (h *Handler) updateFixedExpense(w http.ResponseWriter, r *http.Request) {
 			existing.DeactivatedAt = nil
 		}
 	}
-	if req.Memo != nil       { existing.Memo = *req.Memo }
-	if req.SavingLink != nil { existing.SavingLink = req.SavingLink }
+	if req.Memo != nil {
+		existing.Memo = *req.Memo
+	}
+	if req.SavingLink != nil {
+		existing.SavingLink = req.SavingLink
+	}
 
 	updated, err := h.feRepo.Update(r.Context(), existing)
 	if err != nil {
@@ -1912,10 +1937,14 @@ func (h *Handler) fixedExpenseSummary(w http.ResponseWriter, r *http.Request) {
 	year := now.Year()
 	month := int(now.Month())
 	if y := q.Get("year"); y != "" {
-		if v, err := strconv.Atoi(y); err == nil { year = v }
+		if v, err := strconv.Atoi(y); err == nil {
+			year = v
+		}
 	}
 	if m := q.Get("month"); m != "" {
-		if v, err := strconv.Atoi(m); err == nil { month = v }
+		if v, err := strconv.Atoi(m); err == nil {
+			month = v
+		}
 	}
 
 	fes, err := h.feRepo.ListByCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
@@ -1984,10 +2013,14 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 	year := now.Year()
 	month := int(now.Month())
 	if y := q.Get("year"); y != "" {
-		if v, err := strconv.Atoi(y); err == nil { year = v }
+		if v, err := strconv.Atoi(y); err == nil {
+			year = v
+		}
 	}
 	if m := q.Get("month"); m != "" {
-		if v, err := strconv.Atoi(m); err == nil { month = v }
+		if v, err := strconv.Atoi(m); err == nil {
+			month = v
+		}
 	}
 
 	fes, err := h.feRepo.ListByCouple(r.Context(), auth.CoupleIDFromCtx(r.Context()))
@@ -2248,12 +2281,24 @@ func (h *Handler) updateSchedule(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
-	if req.Title != nil       { existing.Title = *req.Title }
-	if req.Description != nil { existing.Description = *req.Description }
-	if req.AllDay != nil      { existing.AllDay = *req.AllDay }
-	if req.IsDDay != nil      { existing.IsDDay = *req.IsDDay }
-	if req.DDayLabel != nil   { existing.DDayLabel = *req.DDayLabel }
-	if req.Color != nil       { existing.Color = *req.Color }
+	if req.Title != nil {
+		existing.Title = *req.Title
+	}
+	if req.Description != nil {
+		existing.Description = *req.Description
+	}
+	if req.AllDay != nil {
+		existing.AllDay = *req.AllDay
+	}
+	if req.IsDDay != nil {
+		existing.IsDDay = *req.IsDDay
+	}
+	if req.DDayLabel != nil {
+		existing.DDayLabel = *req.DDayLabel
+	}
+	if req.Color != nil {
+		existing.Color = *req.Color
+	}
 	if req.StartDate != nil {
 		d, err := time.Parse("2006-01-02", *req.StartDate)
 		if err != nil {
@@ -2349,8 +2394,12 @@ func (h *Handler) updateDiary(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
-	if req.Content != nil { existing.Content = *req.Content }
-	if req.Mood != nil    { existing.Mood = *req.Mood }
+	if req.Content != nil {
+		existing.Content = *req.Content
+	}
+	if req.Mood != nil {
+		existing.Mood = *req.Mood
+	}
 	updated, err := h.diaryRepo.Update(r.Context(), existing)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
@@ -2563,11 +2612,21 @@ func (h *Handler) updateFridgeItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Name != nil     { existing.Name = *req.Name }
-	if req.Quantity != nil { existing.Quantity = *req.Quantity }
-	if req.Location != nil { existing.Location = *req.Location }
-	if req.Category != nil { existing.Category = *req.Category }
-	if req.Memo != nil     { existing.Memo = *req.Memo }
+	if req.Name != nil {
+		existing.Name = *req.Name
+	}
+	if req.Quantity != nil {
+		existing.Quantity = *req.Quantity
+	}
+	if req.Location != nil {
+		existing.Location = *req.Location
+	}
+	if req.Category != nil {
+		existing.Category = *req.Category
+	}
+	if req.Memo != nil {
+		existing.Memo = *req.Memo
+	}
 	if req.ExpiryDate != nil {
 		if *req.ExpiryDate == "" {
 			existing.ExpiryDate = nil
@@ -2674,9 +2733,15 @@ func (h *Handler) updateSideDish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Name != nil     { existing.Name = *req.Name }
-	if req.Location != nil { existing.Location = *req.Location }
-	if req.Memo != nil     { existing.Memo = *req.Memo }
+	if req.Name != nil {
+		existing.Name = *req.Name
+	}
+	if req.Location != nil {
+		existing.Location = *req.Location
+	}
+	if req.Memo != nil {
+		existing.Memo = *req.Memo
+	}
 	if req.MadeAt != nil {
 		t, err := time.Parse("2006-01-02", *req.MadeAt)
 		if err != nil {
