@@ -105,6 +105,11 @@ func summarizeDividends(symbol string, events []dividendEvent, now time.Time) *D
 	return out
 }
 
+// MeetsDividendYieldFloor는 배당 종목으로 볼 만한 배당률인지 본다.
+func MeetsDividendYieldFloor(annualPS, price float64) bool {
+	return price > 0 && annualPS/price >= dividendYieldFloor
+}
+
 // DividendPlanFor는 보유 종목에서 배당 계획을 만든다.
 //
 // 배당률이 dividendYieldFloor 미만인 종목은 넣지 않는다. 성장률은 그 종목의

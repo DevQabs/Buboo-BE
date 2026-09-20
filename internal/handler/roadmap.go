@@ -126,7 +126,18 @@ func (h *Handler) getRoadmapAssumptions(w http.ResponseWriter, r *http.Request) 
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, a)
+	// 배당 계획은 저장값이 아니라 지금 보유 종목에서 만든 것이다. 저장된 옛
+	// 값을 돌려주면 화면이 계산과 다른 숫자를 보게 된다.
+	cands, err := h.dividendCandidates(r.Context(), coupleID, a.DividendSymbols)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	a.DividendPlan = dividendPlanFrom(cands)
+	respondJSON(w, http.StatusOK, map[string]any{
+		"assumptions":         a,
+		"dividend_candidates": cands,
+	})
 }
 
 // putRoadmapAssumptions — PUT /api/roadmap/assumptions
@@ -162,8 +173,12 @@ func (h *Handler) putRoadmapAssumptions(w http.ResponseWriter, r *http.Request) 
 	if req.Contributions == nil {
 		req.Contributions = []models.Contribution{}
 	}
-	if req.DividendPlan == nil {
-		req.DividendPlan = []models.DividendHolding{}
+	// 배당 계획 자체는 저장하지 않는다. 보유 종목에서 매번 만들기 때문에,
+	// 저장하면 낡은 값이 남아 어느 쪽이 진짜인지 헷갈리기만 한다. 어떤 종목을
+	// 넣을지 고른 것만 저장한다.
+	req.DividendPlan = []models.DividendHolding{}
+	if req.DividendSymbols == nil {
+		req.DividendSymbols = []string{}
 	}
 
 	saved, err := h.roadmapRepo.UpsertAssumptions(r.Context(), &req)
@@ -288,12 +303,12 @@ func (h *Handler) netWorthParts(r *http.Request) (stockKRW, assetKRW, liabilityK
 	return int64(stockValue), assetKRW, liabilityKRW, nil
 }
 
-// dividendPlanFromHoldings는 지금 보유한 종목에서 배당 계획을 만든다.
+// dividendCandidates는 보유 종목마다 배당 이력을 붙여 돌려준다.
 //
 // 저장된 계획을 쓰지 않는 이유는 금방 낡기 때문이다. 주식을 사고팔면 주식수가
-// 달라지고 배당도 매년 인상된다. 종목별 최근 3개년 성장률과 TTM 배당을
-// 야후에서 받아 매번 새로 만든다. 배당률이 낮은 종목은 빠진다.
-func (h *Handler) dividendPlanFromHoldings(ctx context.Context, coupleID string) ([]models.DividendHolding, error) {
+// 달라지고 배당도 매년 인상된다. 주식수는 stock_assets 에서, 배당은 야후에서
+// 조회할 때마다 새로 읽는다.
+func (h *Handler) dividendCandidates(ctx context.Context, coupleID string, selected []string) ([]models.DividendCandidate, error) {
 	stocks, err := h.stockRepo.ListByCouple(ctx, coupleID)
 	if err != nil {
 		return nil, err
@@ -321,37 +336,72 @@ func (h *Handler) dividendPlanFromHoldings(ctx context.Context, coupleID string)
 		return nil, err
 	}
 
+	chosen := make(map[string]bool, len(selected))
+	for _, sym := range selected {
+		chosen[sym] = true
+	}
+
 	// 종목마다 HTTP 한 번이라 순서대로 기다리면 종목 수만큼 느려진다.
 	var (
-		mu   sync.Mutex
-		wg   sync.WaitGroup
-		plan = make([]models.DividendHolding, 0, len(symbols))
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		out = make([]models.DividendCandidate, 0, len(symbols))
 	)
 	for _, sym := range symbols {
 		wg.Add(1)
 		go func(sym string) {
 			defer wg.Done()
 			hist, err := h.priceSvc.FetchDividendHistory(ctx, sym, merged[sym].exchange)
-			if err != nil || hist == nil {
-				return // 배당 없는 종목이거나 조회 실패. 계획에서 빠진다
+			if err != nil || hist == nil || hist.AnnualPS <= 0 {
+				return // 배당 없는 종목이거나 조회 실패
 			}
 			snap, ok := snaps[sym]
-			if !ok {
+			if !ok || snap.Price <= 0 {
 				return
 			}
-			d, include := service.DividendPlanFor(sym, merged[sym].shares, snap.Price, hist)
-			if !include {
-				return
+			c := models.DividendCandidate{
+				Symbol:      sym,
+				Shares:      merged[sym].shares,
+				AnnualDPS:   hist.AnnualPS,
+				Yield:       hist.AnnualPS / snap.Price,
+				CAGR3Y:      hist.CAGR3Y,
+				AutoInclude: service.MeetsDividendYieldFloor(hist.AnnualPS, snap.Price),
+			}
+			// 고른 종목이 있으면 그 목록이 기준이고, 없으면 배당률로 자동 판정한다.
+			if len(chosen) > 0 {
+				c.Selected = chosen[sym]
+			} else {
+				c.Selected = c.AutoInclude
 			}
 			mu.Lock()
-			plan = append(plan, d)
+			out = append(out, c)
 			mu.Unlock()
 		}(sym)
 	}
 	wg.Wait()
 
-	sort.Slice(plan, func(i, j int) bool { return plan[i].Symbol < plan[j].Symbol })
-	return plan, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].Symbol < out[j].Symbol })
+	return out, nil
+}
+
+// dividendPlanFrom은 고른 후보만 배당 계획으로 바꾼다. 성장률은 그 종목의
+// 최근 3개년 실적을 그대로 쓴다.
+func dividendPlanFrom(cands []models.DividendCandidate) []models.DividendHolding {
+	plan := make([]models.DividendHolding, 0, len(cands))
+	for _, c := range cands {
+		if !c.Selected {
+			continue
+		}
+		plan = append(plan, models.DividendHolding{
+			Symbol:      c.Symbol,
+			Shares:      c.Shares,
+			DPS:         c.AnnualDPS,
+			GrowthStart: c.CAGR3Y,
+			Floor:       c.CAGR3Y,
+			StartsYear:  time.Now().UTC().Year() + 1,
+		})
+	}
+	return plan
 }
 
 // roadmapProjection — GET /api/roadmap/projection
@@ -368,7 +418,7 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 		a                                *models.RoadmapAssumptions
 		stockKRW, assetKRW, liabilityKRW int64
 		snapshots                        []models.NetWorthSnapshot
-		divPlan                          []models.DividendHolding
+		divCands                         []models.DividendCandidate
 		goalErr, worthErr, snapErr       error
 		divErr                           error
 		wg                               sync.WaitGroup
@@ -391,7 +441,16 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 	}()
 	go func() {
 		defer wg.Done()
-		divPlan, divErr = h.dividendPlanFromHoldings(ctx, coupleID)
+		// 저장된 가정을 아직 못 읽었으므로 선택 목록은 여기서 따로 읽는다.
+		var stored *models.RoadmapAssumptions
+		if g, err := h.roadmapRepo.ActiveGoal(ctx, coupleID); err == nil && g != nil {
+			stored, _ = h.roadmapRepo.Assumptions(ctx, g.ID)
+		}
+		var selected []string
+		if stored != nil {
+			selected = stored.DividendSymbols
+		}
+		divCands, divErr = h.dividendCandidates(ctx, coupleID, selected)
 	}()
 	wg.Wait()
 
@@ -402,7 +461,7 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// 배당 계획은 저장값이 아니라 지금 보유 종목에서 만든 것을 쓴다.
-	a.DividendPlan = divPlan
+	a.DividendPlan = dividendPlanFrom(divCands)
 
 	// 기타 자산은 저장된 가정이 있으면 그 값을, 없으면 실제 보유분을 쓴다.
 	if a.OtherAssetsKRW == 0 {

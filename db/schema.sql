@@ -318,3 +318,6 @@ CREATE TABLE IF NOT EXISTS networth_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_networth_snapshots_couple
     ON networth_snapshots(couple_id, snapshot_month);
+
+-- 배당 계산에 쓸 종목. 비어 있으면 배당률 기준으로 자동 선택한다.
+ALTER TABLE roadmap_assumptions ADD COLUMN IF NOT EXISTS dividend_symbols JSONB NOT NULL DEFAULT '[]';

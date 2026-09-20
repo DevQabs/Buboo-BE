@@ -57,14 +57,14 @@ func (r *PgRoadmapRepository) UpsertGoal(ctx context.Context, g *models.RoadmapG
 func (r *PgRoadmapRepository) Assumptions(ctx context.Context, goalID string) (*models.RoadmapAssumptions, error) {
 	row := r.db.QueryRow(ctx,
 		`SELECT id, couple_id, goal_id, price_growth, dividend_tax_rate, other_assets_krw,
-		        contributions, dividend_plan, updated_at
+		        contributions, dividend_plan, dividend_symbols, updated_at
 		   FROM roadmap_assumptions WHERE goal_id = $1`, goalID)
 	var (
-		a                 models.RoadmapAssumptions
-		contribs, divPlan []byte
+		a                          models.RoadmapAssumptions
+		contribs, divPlan, divSyms []byte
 	)
 	err := row.Scan(&a.ID, &a.CoupleID, &a.GoalID, &a.PriceGrowth, &a.DividendTaxRate,
-		&a.OtherAssetsKRW, &contribs, &divPlan, &a.UpdatedAt)
+		&a.OtherAssetsKRW, &contribs, &divPlan, &divSyms, &a.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -75,6 +75,9 @@ func (r *PgRoadmapRepository) Assumptions(ctx context.Context, goalID string) (*
 		return nil, err
 	}
 	if err := json.Unmarshal(divPlan, &a.DividendPlan); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(divSyms, &a.DividendSymbols); err != nil {
 		return nil, err
 	}
 	return &a, nil
@@ -89,21 +92,29 @@ func (r *PgRoadmapRepository) UpsertAssumptions(ctx context.Context, a *models.R
 	if err != nil {
 		return nil, err
 	}
+	if a.DividendSymbols == nil {
+		a.DividendSymbols = []string{}
+	}
+	divSyms, err := json.Marshal(a.DividendSymbols)
+	if err != nil {
+		return nil, err
+	}
 	a.UpdatedAt = time.Now().UTC()
 	_, err = r.db.Exec(ctx,
 		`INSERT INTO roadmap_assumptions
 		   (id, couple_id, goal_id, price_growth, dividend_tax_rate, other_assets_krw,
-		    contributions, dividend_plan, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		    contributions, dividend_plan, dividend_symbols, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 ON CONFLICT (goal_id) DO UPDATE
 		 SET price_growth = EXCLUDED.price_growth,
 		     dividend_tax_rate = EXCLUDED.dividend_tax_rate,
 		     other_assets_krw = EXCLUDED.other_assets_krw,
 		     contributions = EXCLUDED.contributions,
 		     dividend_plan = EXCLUDED.dividend_plan,
+		     dividend_symbols = EXCLUDED.dividend_symbols,
 		     updated_at = EXCLUDED.updated_at`,
 		a.ID, a.CoupleID, a.GoalID, a.PriceGrowth, a.DividendTaxRate, a.OtherAssetsKRW,
-		string(contribs), string(divPlan), a.UpdatedAt)
+		string(contribs), string(divPlan), string(divSyms), a.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

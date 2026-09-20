@@ -858,7 +858,10 @@ type RoadmapAssumptions struct {
 	OtherAssetsKRW  int64             `json:"other_assets_krw"`
 	Contributions   []Contribution    `json:"contributions"`
 	DividendPlan    []DividendHolding `json:"dividend_plan"`
-	UpdatedAt       time.Time         `json:"updated_at"`
+	// DividendSymbols는 배당 계산에 쓸 종목이다. 비어 있으면 배당률이
+	// 기준을 넘는 종목이 자동으로 들어간다.
+	DividendSymbols []string  `json:"dividend_symbols"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // NetWorthSnapshot은 계획 대비 실적을 추적하는 유일한 근거다.
@@ -883,6 +886,18 @@ type RoadmapYearRow struct {
 	DividendAfterTaxKRW   int64  `json:"dividend_after_tax_krw"`
 	ProjectedNetWorthKRW  int64  `json:"projected_net_worth_krw"`
 	ActualNetWorthKRW     *int64 `json:"actual_net_worth_krw"`
+}
+
+// DividendCandidate는 배당 계산에 넣을 수 있는 보유 종목이다. 화면에서
+// 고를 수 있도록 배당률과 성장률을 함께 준다.
+type DividendCandidate struct {
+	Symbol      string  `json:"symbol"`
+	Shares      float64 `json:"shares"`
+	AnnualDPS   float64 `json:"annual_dps"` // TTM, 종목 통화
+	Yield       float64 `json:"yield"`
+	CAGR3Y      float64 `json:"cagr_3y"`
+	Selected    bool    `json:"selected"`
+	AutoInclude bool    `json:"auto_include"` // 기준 배당률을 넘는가
 }
 
 // RoadmapMonthPoint는 월 단위 궤적 한 점이다. 연도별 표는 큰 흐름만 보여줘서,
