@@ -835,16 +835,19 @@ type Contribution struct {
 	MonthlyKRW int64 `json:"monthly_krw"`
 }
 
-// DividendHolding은 배당을 내는 기존 보유 종목이다. 주당 배당은 시작률에서
-// 매년 Decay만큼 감속해 Floor에 수렴한다.
+// DividendHolding은 배당을 내는 기존 보유 종목이다.
+//
+// 인상 시점과 지급 월은 종목마다 다르다. UNH 는 6월 지급분부터, MCD 는 12월
+// 지급분부터 오른다. 연초에 일괄 인상으로 보면 최대 한 해치가 어긋난다.
 type DividendHolding struct {
-	Symbol      string  `json:"symbol"`
-	Shares      float64 `json:"shares"`
-	DPS         float64 `json:"dps"`          // 기준연도 주당 배당 (USD)
-	GrowthStart float64 `json:"growth_start"` // 0.105 = 10.5%
-	Decay       float64 `json:"decay"`        // 0.003 = 연 0.3%p 감속
-	Floor       float64 `json:"floor"`
-	StartsYear  int     `json:"starts_year"` // 인상 시작 연도. 그 전해까지 DPS 고정
+	Symbol        string  `json:"symbol"`
+	Shares        float64 `json:"shares"`
+	PerPayment    float64 `json:"per_payment"`    // 최근 1회 지급액 (종목 통화)
+	PaymentMonths []int   `json:"payment_months"` // 지급 월 (1~12)
+	RaiseMonth    int     `json:"raise_month"`    // 인상이 반영되는 지급 월
+	GrowthRate    float64 `json:"growth_rate"`    // 연 인상률 (최근 3개년 CAGR)
+	BaseYear      int     `json:"base_year"`      // PerPayment 기준 시점
+	BaseMonth     int     `json:"base_month"`
 }
 
 // RoadmapAssumptions는 시뮬레이션 입력이다. 적립 스케줄과 배당 계획은 자주
@@ -898,6 +901,9 @@ type DividendCandidate struct {
 	CAGR3Y      float64 `json:"cagr_3y"`
 	Selected    bool    `json:"selected"`
 	AutoInclude bool    `json:"auto_include"` // 기준 배당률을 넘는가
+	// Holding은 이 종목이 계산에 들어갈 때 쓰는 값이다. 후보를 만들 때 이미
+	// 구해 둔 것을 그대로 넘겨, 고른 뒤 다시 조회하지 않는다.
+	Holding DividendHolding `json:"-"`
 }
 
 // RoadmapMonthPoint는 월 단위 궤적 한 점이다. 연도별 표는 큰 흐름만 보여줘서,

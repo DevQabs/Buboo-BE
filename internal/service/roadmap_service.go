@@ -18,20 +18,40 @@ import (
 	"github.com/yourname/couple-app/internal/models"
 )
 
-// DividendPerShare는 주어진 연도의 주당 배당을 낸다.
+// DividendPerShareAt은 그 달에 나오는 주당 배당이다. 지급 달이 아니면 0이다.
 //
-// StartsYear 전에는 기준 배당 그대로다. 그 뒤로는 시작률에서 해마다 Decay만큼
-// 깎인 인상률을 곱해 나가고, 인상률은 Floor 아래로 내려가지 않는다.
-func DividendPerShare(h models.DividendHolding, year int) float64 {
-	dps := h.DPS
-	for y := h.StartsYear; y <= year; y++ {
-		rate := h.GrowthStart - h.Decay*float64(y-h.StartsYear)
-		if rate < h.Floor {
-			rate = h.Floor
-		}
-		dps *= 1 + rate
+// 인상은 종목마다 정해진 지급 월에 반영된다. 기준 지급액(PerPayment)은 그
+// 시점까지의 인상이 이미 들어간 값이므로, 그 뒤로 인상 월을 몇 번 지났는지만
+// 세어 곱한다.
+func DividendPerShareAt(h models.DividendHolding, year int, month time.Month) float64 {
+	if !isPaymentMonth(h, int(month)) {
+		return 0
 	}
-	return dps
+	return h.PerPayment * math.Pow(1+h.GrowthRate, float64(raisesSinceBase(h, year, int(month))))
+}
+
+func isPaymentMonth(h models.DividendHolding, month int) bool {
+	for _, m := range h.PaymentMonths {
+		if m == month {
+			return true
+		}
+	}
+	return false
+}
+
+// raisesSinceBase는 기준 시점 이후 인상 월을 몇 번 지났는지 센다.
+func raisesSinceBase(h models.DividendHolding, year, month int) int {
+	k := year - h.BaseYear
+	if month >= h.RaiseMonth {
+		k++
+	}
+	if h.BaseMonth >= h.RaiseMonth {
+		k--
+	}
+	if k < 0 {
+		return 0
+	}
+	return k
 }
 
 // monthlyContribution은 해당 연도의 월 적립액이다. 스케줄에 없는 해는 0이다.
@@ -91,26 +111,22 @@ func Project(a models.RoadmapAssumptions, stockKRW int64, fx float64, start, end
 }
 
 // dividendAfterTax는 기존 보유분에서 그 달에 나오는 세후 배당이다.
-//
-// UNH·MCD 모두 3·6·9·12월 분기 지급이라, 연 배당의 1/4이 그 네 달에만
-// 들어온다. 12로 나눠 매달 흘리면 연 합계는 같아도 월별 궤적이 실제와
-// 어긋난다 — 배당 달의 계단이 사라진다.
+// 종목마다 지급 월이 달라 각자의 일정으로 더한다.
 func dividendAfterTax(a models.RoadmapAssumptions, fx float64, year int, month time.Month) float64 {
-	switch month {
-	case time.March, time.June, time.September, time.December:
-	default:
-		return 0
+	var usd float64
+	for _, h := range a.DividendPlan {
+		usd += h.Shares * DividendPerShareAt(h, year, month)
 	}
-	return annualDividendAfterTax(a, fx, year) / 4
+	return usd * fx * (1 - a.DividendTaxRate)
 }
 
 // annualDividendAfterTax는 그 해 기존 보유분의 세후 배당 총액이다.
 func annualDividendAfterTax(a models.RoadmapAssumptions, fx float64, year int) float64 {
-	var annualUSD float64
-	for _, h := range a.DividendPlan {
-		annualUSD += h.Shares * DividendPerShare(h, year)
+	var total float64
+	for m := time.January; m <= time.December; m++ {
+		total += dividendAfterTax(a, fx, year, m)
 	}
-	return annualUSD * fx * (1 - a.DividendTaxRate)
+	return total
 }
 
 // SolveRequiredGrowth는 목표일에 목표액이 되는 연 가격상승률을 이분탐색으로 찾는다.

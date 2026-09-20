@@ -375,6 +375,10 @@ func (h *Handler) dividendCandidates(ctx context.Context, m *marketView, selecte
 			if !ok || snap.Price <= 0 {
 				return
 			}
+			holding, ok2 := service.DividendPlanFor(sym, merged[sym].shares, snap.Price, hist)
+			if !ok2 {
+				return
+			}
 			c := models.DividendCandidate{
 				Symbol:      sym,
 				Shares:      merged[sym].shares,
@@ -382,6 +386,7 @@ func (h *Handler) dividendCandidates(ctx context.Context, m *marketView, selecte
 				Yield:       hist.AnnualPS / snap.Price,
 				CAGR3Y:      hist.CAGR3Y,
 				AutoInclude: service.MeetsDividendYieldFloor(hist.AnnualPS, snap.Price),
+				Holding:     holding,
 			}
 			// 고른 종목이 있으면 그 목록이 기준이고, 없으면 배당률로 자동 판정한다.
 			if len(chosen) > 0 {
@@ -400,22 +405,13 @@ func (h *Handler) dividendCandidates(ctx context.Context, m *marketView, selecte
 	return out, nil
 }
 
-// dividendPlanFrom은 고른 후보만 배당 계획으로 바꾼다. 성장률은 그 종목의
-// 최근 3개년 실적을 그대로 쓴다.
+// dividendPlanFrom은 고른 후보만 배당 계획으로 모은다.
 func dividendPlanFrom(cands []models.DividendCandidate) []models.DividendHolding {
 	plan := make([]models.DividendHolding, 0, len(cands))
 	for _, c := range cands {
-		if !c.Selected {
-			continue
+		if c.Selected {
+			plan = append(plan, c.Holding)
 		}
-		plan = append(plan, models.DividendHolding{
-			Symbol:      c.Symbol,
-			Shares:      c.Shares,
-			DPS:         c.AnnualDPS,
-			GrowthStart: c.CAGR3Y,
-			Floor:       c.CAGR3Y,
-			StartsYear:  time.Now().UTC().Year() + 1,
-		})
 	}
 	return plan
 }

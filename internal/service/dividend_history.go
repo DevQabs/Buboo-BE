@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/yourname/couple-app/internal/models"
@@ -31,9 +32,16 @@ type cachedDividends struct {
 
 // DividendHistory는 한 종목의 배당 이력에서 뽑은 요약이다.
 type DividendHistory struct {
-	Symbol   string
-	AnnualPS float64 // 최근 4회 지급 합계 (TTM), 종목 통화 기준
-	CAGR3Y   float64 // 최근 3개년 연 성장률. 이력이 모자라면 0
+	Symbol string
+	// PerPayment는 최근 1회 지급액이다. TTM 합계는 인상 전 분기가 섞여 있어
+	// 앞으로 받을 금액보다 작다.
+	PerPayment    float64
+	PaymentMonths []int   // 최근 1년간 지급이 있었던 달
+	RaiseMonth    int     // 가장 최근에 지급액이 오른 달
+	AnnualPS      float64 // PerPayment × 연 지급 횟수 (현재 지급률 기준)
+	CAGR3Y        float64 // 최근 3개년 연 성장률. 이력이 모자라면 0
+	LastYear      int     // PerPayment 기준 시점
+	LastMonth     int
 }
 
 // FetchDividendHistory는 종목의 TTM 배당과 3개년 성장률을 낸다.
@@ -80,27 +88,60 @@ type yahooDividendResponse struct {
 	} `json:"chart"`
 }
 
-// summarizeDividends는 배당 이벤트에서 TTM 배당과 3개년 성장률을 낸다.
+// summarizeDividends는 배당 이벤트에서 현재 지급률과 3개년 성장률을 낸다.
 //
-// TTM 은 최근 12개월 지급 합계다. 연초에 인상이 반영되므로 연도별 합계보다
-// 지금 받는 금액에 가깝다. 성장률은 완결된 연도끼리만 비교한다 — 진행 중인
-// 올해를 넣으면 아직 안 받은 분기 때문에 성장률이 음수로 나온다.
+// 앞으로 받을 금액은 최근 1회 지급액이 기준이다. TTM 합계는 인상 전 분기가
+// 섞여 있어 과소평가된다 — UNH 는 6월에 올랐는데 TTM 에는 3월치 옛 금액이
+// 남아 있다.
+//
+// 인상 월은 지급액이 마지막으로 오른 달이다. 종목마다 다르고(UNH 6월,
+// MCD 12월) 연초 일괄 인상으로 보면 한 해치가 어긋난다.
+//
+// 성장률은 완결된 연도끼리만 비교한다 — 진행 중인 올해를 넣으면 아직 안 받은
+// 분기 때문에 성장률이 음수로 나온다.
 func summarizeDividends(symbol string, events []dividendEvent, now time.Time) *DividendHistory {
 	out := &DividendHistory{Symbol: symbol}
-
-	ttmFrom := now.AddDate(-1, 0, 0).Unix()
-	byYear := make(map[int]float64, 8)
-	for _, e := range events {
-		if e.Date >= ttmFrom {
-			out.AnnualPS += e.Amount
-		}
-		byYear[time.Unix(e.Date, 0).UTC().Year()] += e.Amount
+	if len(events) == 0 {
+		return out
 	}
 
-	last := now.Year() - 1
-	base := last - 3
-	if byYear[base] > 0 && byYear[last] > 0 {
-		out.CAGR3Y = math.Pow(byYear[last]/byYear[base], 1.0/3.0) - 1
+	sort.Slice(events, func(i, j int) bool { return events[i].Date < events[j].Date })
+
+	byYear := make(map[int]float64, 8)
+	monthSeen := make(map[int]bool, 12)
+	ttmFrom := now.AddDate(-1, 0, 0).Unix()
+	var prev float64
+	for _, e := range events {
+		t := time.Unix(e.Date, 0).UTC()
+		byYear[t.Year()] += e.Amount
+		if e.Date >= ttmFrom {
+			monthSeen[int(t.Month())] = true
+		}
+		if prev > 0 && e.Amount > prev {
+			out.RaiseMonth = int(t.Month())
+		}
+		prev = e.Amount
+	}
+
+	last := events[len(events)-1]
+	lastAt := time.Unix(last.Date, 0).UTC()
+	out.PerPayment = last.Amount
+	out.LastYear, out.LastMonth = lastAt.Year(), int(lastAt.Month())
+
+	out.PaymentMonths = make([]int, 0, len(monthSeen))
+	for m := 1; m <= 12; m++ {
+		if monthSeen[m] {
+			out.PaymentMonths = append(out.PaymentMonths, m)
+		}
+	}
+	out.AnnualPS = out.PerPayment * float64(len(out.PaymentMonths))
+	if out.RaiseMonth == 0 {
+		out.RaiseMonth = out.LastMonth // 인상 이력이 없으면 최근 지급 달을 기준으로 둔다
+	}
+
+	lastDone := now.Year() - 1
+	if base := lastDone - 3; byYear[base] > 0 && byYear[lastDone] > 0 {
+		out.CAGR3Y = math.Pow(byYear[lastDone]/byYear[base], 1.0/3.0) - 1
 	}
 	return out
 }
@@ -110,24 +151,23 @@ func MeetsDividendYieldFloor(annualPS, price float64) bool {
 	return price > 0 && annualPS/price >= dividendYieldFloor
 }
 
-// DividendPlanFor는 보유 종목에서 배당 계획을 만든다.
+// DividendPlanFor는 배당 이력을 계산에 쓸 형태로 바꾼다.
 //
-// 배당률이 dividendYieldFloor 미만인 종목은 넣지 않는다. 성장률은 그 종목의
-// 최근 3개년 실적을 그대로 쓴다 — 감속·하한 같은 전망은 사람이 넣을 값이지
-// 과거 데이터에서 나오지 않는다.
+// 배당률 판정은 하지 않는다 — 기준에 못 미쳐도 사용자가 직접 고르면 넣어야
+// 하기 때문이다. 성장률은 그 종목의 최근 3개년 실적을 그대로 쓴다. 감속 같은
+// 전망은 사람이 넣을 값이지 과거 데이터에서 나오지 않는다.
 func DividendPlanFor(symbol string, shares, price float64, h *DividendHistory) (models.DividendHolding, bool) {
-	if h == nil || h.AnnualPS <= 0 || price <= 0 {
-		return models.DividendHolding{}, false
-	}
-	if h.AnnualPS/price < dividendYieldFloor {
+	if h == nil || h.PerPayment <= 0 || price <= 0 || len(h.PaymentMonths) == 0 {
 		return models.DividendHolding{}, false
 	}
 	return models.DividendHolding{
-		Symbol:      symbol,
-		Shares:      shares,
-		DPS:         h.AnnualPS,
-		GrowthStart: h.CAGR3Y,
-		Floor:       h.CAGR3Y, // 감속 없이 3개년 성장률을 유지한다고 본다
-		StartsYear:  time.Now().UTC().Year() + 1,
+		Symbol:        symbol,
+		Shares:        shares,
+		PerPayment:    h.PerPayment,
+		PaymentMonths: h.PaymentMonths,
+		RaiseMonth:    h.RaiseMonth,
+		GrowthRate:    h.CAGR3Y,
+		BaseYear:      h.LastYear,
+		BaseMonth:     h.LastMonth,
 	}, true
 }
