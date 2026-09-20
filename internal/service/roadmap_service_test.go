@@ -81,6 +81,30 @@ func TestDividendPerShare_DecaysToTheFloorAndStaysThere(t *testing.T) {
 	}
 }
 
+func TestProject_PaysDividendsQuarterlyNotMonthly(t *testing.T) {
+	// UNH·MCD 는 3·6·9·12월에 지급한다. 10월에 시작하면 올해 남은 배당은
+	// 12월 한 번, 연 배당의 1/4 뿐이다.
+	a := models.RoadmapAssumptions{
+		DividendTaxRate: 0.154,
+		DividendPlan:    []models.DividendHolding{{Shares: 100, DPS: 10, StartsYear: 2027}},
+	}
+
+	_, months := Project(a, 100_000_000, 1000, date(2026, time.September, 20), date(2026, time.December, 31), 1992)
+
+	annualAfterTax := 100.0 * 10 * 1000 * (1 - 0.154) // 846,000
+	want := int64(annualAfterTax / 4)
+	if len(months) != 3 {
+		t.Fatalf("10~12월 세 달이어야 한다: %d", len(months))
+	}
+	// 10월·11월은 배당이 없고 12월에만 들어온다.
+	if months[1].ProjectedNetWorthKRW != months[0].ProjectedNetWorthKRW {
+		t.Error("배당 없는 달에 순자산이 늘었다")
+	}
+	if got := months[2].ProjectedNetWorthKRW - months[1].ProjectedNetWorthKRW; got != want {
+		t.Errorf("12월 배당: want %v, got %v", want, got)
+	}
+}
+
 func TestProject_ReinvestsDividendsIntoTheNewPool(t *testing.T) {
 	// 성장 0, 적립 0. 배당만 들어오므로 순자산 증가분이 곧 세후 배당이다.
 	a := models.RoadmapAssumptions{

@@ -71,7 +71,7 @@ func Project(a models.RoadmapAssumptions, stockKRW int64, fx float64, start, end
 		}
 
 		contribution := row.MonthlyKRW
-		dividend := monthlyDividendAfterTax(a, fx, year)
+		dividend := dividendAfterTax(a, fx, year, m.Month())
 
 		pool += float64(contribution) + dividend
 		pool *= monthlyGrowth
@@ -88,14 +88,27 @@ func Project(a models.RoadmapAssumptions, stockKRW int64, fx float64, start, end
 	return rows, months
 }
 
-// monthlyDividendAfterTax는 기존 보유분에서 그 달에 나오는 세후 배당이다.
-// 연 배당을 12로 나눠 매달 같은 금액이 들어온다고 본다.
-func monthlyDividendAfterTax(a models.RoadmapAssumptions, fx float64, year int) float64 {
+// dividendAfterTax는 기존 보유분에서 그 달에 나오는 세후 배당이다.
+//
+// UNH·MCD 모두 3·6·9·12월 분기 지급이라, 연 배당의 1/4이 그 네 달에만
+// 들어온다. 12로 나눠 매달 흘리면 연 합계는 같아도 월별 궤적이 실제와
+// 어긋난다 — 배당 달의 계단이 사라진다.
+func dividendAfterTax(a models.RoadmapAssumptions, fx float64, year int, month time.Month) float64 {
+	switch month {
+	case time.March, time.June, time.September, time.December:
+	default:
+		return 0
+	}
+	return annualDividendAfterTax(a, fx, year) / 4
+}
+
+// annualDividendAfterTax는 그 해 기존 보유분의 세후 배당 총액이다.
+func annualDividendAfterTax(a models.RoadmapAssumptions, fx float64, year int) float64 {
 	var annualUSD float64
 	for _, h := range a.DividendPlan {
 		annualUSD += h.Shares * DividendPerShare(h, year)
 	}
-	return annualUSD * fx * (1 - a.DividendTaxRate) / 12
+	return annualUSD * fx * (1 - a.DividendTaxRate)
 }
 
 // SolveRequiredGrowth는 목표일에 목표액이 되는 연 가격상승률을 이분탐색으로 찾는다.
@@ -146,5 +159,5 @@ func DividendYield(a models.RoadmapAssumptions, stockKRW int64, fx float64, year
 	if stockKRW <= 0 {
 		return 0
 	}
-	return monthlyDividendAfterTax(a, fx, year) * 12 / float64(stockKRW)
+	return annualDividendAfterTax(a, fx, year) / float64(stockKRW)
 }
