@@ -145,3 +145,31 @@ func almostEqual(a, b float64) bool {
 	d := a - b
 	return d < 1e-9 && d > -1e-9
 }
+
+func TestNewBaseline_StartsFromTheAnchorAndHitsTheTarget(t *testing.T) {
+	// 2026년 9월 4.15억에서 출발해 2032년 말 10억이 되는 계획선.
+	a := models.RoadmapAssumptions{
+		OtherAssetsKRW: 95_548_179,
+		Contributions:  []models.Contribution{{Year: 2026, MonthlyKRW: 2_500_000}, {Year: 2027, MonthlyKRW: 3_500_000}},
+	}
+	anchor := date(2026, time.September, 1)
+
+	b := NewBaseline(a, 319_452_795, 1380, 1_000_000_000, anchor, date(2032, time.December, 31), 1992)
+
+	if b.AnchorNetWorthKRW != 415_000_974 {
+		t.Errorf("출발 순자산은 주식+기타: want 415,000,974, got %v", b.AnchorNetWorthKRW)
+	}
+	if got := b.Months[0].Month; got != "2026-10" {
+		t.Errorf("9월은 이미 출발값에 들어 있어 10월부터 굴린다: got %s", got)
+	}
+	last := b.Months[len(b.Months)-1]
+	if last.Month != "2032-12" {
+		t.Errorf("목표 월까지 굴려야 한다: got %s", last.Month)
+	}
+	if diff := last.ProjectedNetWorthKRW - 1_000_000_000; diff > 1000 || diff < -1000 {
+		t.Errorf("마지막 달 목표는 10억이어야 한다: got %v", last.ProjectedNetWorthKRW)
+	}
+	if b.PriceGrowth <= 0 {
+		t.Errorf("계획 수익률이 저장돼야 한다: got %v", b.PriceGrowth)
+	}
+}

@@ -158,6 +158,24 @@ func SolveRequiredGrowth(a models.RoadmapAssumptions, stockKRW int64, fx float64
 	return (lo + hi) / 2
 }
 
+// NewBaseline은 출발 월의 자산에서 목표까지의 계획선을 확정한다.
+//
+// 출발 월은 이미 순자산에 반영된 달로 보고 다음 달부터 굴린다. 지금 시각이
+// 아니라 출발 월만 보므로, 언제 만들어도 같은 입력이면 같은 계획선이 나온다.
+func NewBaseline(a models.RoadmapAssumptions, stockKRW int64, fx float64, targetKRW int64, anchorMonth, targetDate time.Time, birthYear int) models.RoadmapBaseline {
+	start := anchorMonth.AddDate(0, 0, 1) // 달 중간으로 두어 출발 월을 건너뛰게 한다
+	a.PriceGrowth = SolveRequiredGrowth(a, stockKRW, fx, targetKRW, start, targetDate, birthYear)
+	years, months := Project(a, stockKRW, fx, start, targetDate, birthYear)
+	return models.RoadmapBaseline{
+		AnchorMonth:       anchorMonth,
+		AnchorNetWorthKRW: stockKRW + a.OtherAssetsKRW,
+		PriceGrowth:       a.PriceGrowth,
+		DividendYield:     DividendYield(a, stockKRW, fx, anchorMonth.Year()),
+		Years:             years,
+		Months:            months,
+	}
+}
+
 // nextMonthStart는 굴리기 시작할 달의 1일이다.
 //
 // 시작일이 달 중간이면 그 달은 건너뛴다. 이번 달의 적립과 배당은 이미 지금

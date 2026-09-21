@@ -918,6 +918,21 @@ type RoadmapMonthPoint struct {
 	ActualContributionKRW *int64 `json:"actual_contribution_krw"`
 }
 
+// RoadmapBaseline은 확정된 계획선이다. 한 번 만들면 다시 계산하지 않는다.
+// 계획선이 실시간 순자산을 따라 움직이면 계획 대비 얼마나 어긋났는지 볼 수
+// 없기 때문이다. 가정이나 목표를 바꿀 때만 새로 만든다.
+type RoadmapBaseline struct {
+	GoalID            string              `json:"goal_id"`
+	CoupleID          string              `json:"couple_id"`
+	AnchorMonth       time.Time           `json:"anchor_month"` // 출발 월 1일
+	AnchorNetWorthKRW int64               `json:"anchor_net_worth_krw"`
+	PriceGrowth       float64             `json:"price_growth"`   // 확정 당시 필요 가격상승률
+	DividendYield     float64             `json:"dividend_yield"` // 확정 당시 세후 배당수익률
+	Years             []RoadmapYearRow    `json:"years"`
+	Months            []RoadmapMonthPoint `json:"months"` // 출발 월 다음 달부터
+	CreatedAt         time.Time           `json:"created_at"`
+}
+
 // RoadmapProjection은 로드맵 화면 한 장에 필요한 전부다.
 type RoadmapProjection struct {
 	Goal struct {
