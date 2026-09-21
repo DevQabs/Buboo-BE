@@ -200,3 +200,58 @@ func (r *PgRoadmapRepository) MonthlyContributions(ctx context.Context, coupleID
 	}
 	return out, rows.Err()
 }
+
+// Baseline은 목표에 확정된 계획선이다. 없으면 (nil, nil)이다.
+func (r *PgRoadmapRepository) Baseline(ctx context.Context, goalID string) (*models.RoadmapBaseline, error) {
+	row := r.db.QueryRow(ctx,
+		`SELECT goal_id, couple_id, anchor_month, anchor_net_worth_krw, price_growth,
+		        dividend_yield, years, months, created_at
+		   FROM roadmap_baselines WHERE goal_id = $1`, goalID)
+	var (
+		b             models.RoadmapBaseline
+		years, months []byte
+	)
+	err := row.Scan(&b.GoalID, &b.CoupleID, &b.AnchorMonth, &b.AnchorNetWorthKRW,
+		&b.PriceGrowth, &b.DividendYield, &years, &months, &b.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(years, &b.Years); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(months, &b.Months); err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+// SaveBaseline은 계획선을 저장한다. 이미 있으면 그대로 두어, 동시에 두 요청이
+// 만들어도 먼저 저장된 선이 유지된다.
+func (r *PgRoadmapRepository) SaveBaseline(ctx context.Context, b *models.RoadmapBaseline) error {
+	years, err := json.Marshal(b.Years)
+	if err != nil {
+		return err
+	}
+	months, err := json.Marshal(b.Months)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec(ctx,
+		`INSERT INTO roadmap_baselines
+		   (goal_id, couple_id, anchor_month, anchor_net_worth_krw, price_growth,
+		    dividend_yield, years, months)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		 ON CONFLICT (goal_id) DO NOTHING`,
+		b.GoalID, b.CoupleID, b.AnchorMonth, b.AnchorNetWorthKRW, b.PriceGrowth,
+		b.DividendYield, string(years), string(months))
+	return err
+}
+
+// DeleteBaseline은 계획선을 지운다. 다음 조회에서 새로 만들어진다.
+func (r *PgRoadmapRepository) DeleteBaseline(ctx context.Context, goalID string) error {
+	_, err := r.db.Exec(ctx, `DELETE FROM roadmap_baselines WHERE goal_id = $1`, goalID)
+	return err
+}

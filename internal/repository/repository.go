@@ -333,4 +333,10 @@ type RoadmapRepository interface {
 	// MonthlyContributions sums savings and net stock purchases per month.
 	MonthlyContributions(ctx context.Context, coupleID string, from time.Time) (map[string]int64, error)
 	ListSnapshots(ctx context.Context, coupleID string) ([]models.NetWorthSnapshot, error)
+
+	// Baseline returns the frozen plan for a goal, or nil if none.
+	Baseline(ctx context.Context, goalID string) (*models.RoadmapBaseline, error)
+	SaveBaseline(ctx context.Context, b *models.RoadmapBaseline) error
+	// DeleteBaseline drops the frozen plan so the next view rebuilds it.
+	DeleteBaseline(ctx context.Context, goalID string) error
 }

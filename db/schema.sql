@@ -321,3 +321,17 @@ CREATE INDEX IF NOT EXISTS idx_networth_snapshots_couple
 
 -- 배당 계산에 쓸 종목. 비어 있으면 배당률 기준으로 자동 선택한다.
 ALTER TABLE roadmap_assumptions ADD COLUMN IF NOT EXISTS dividend_symbols JSONB NOT NULL DEFAULT '[]';
+
+-- 확정된 로드맵 계획선. 목표당 하나. 한 번 만들면 다시 계산하지 않고,
+-- 가정이나 목표를 바꿀 때만 지우고 새로 만든다.
+CREATE TABLE IF NOT EXISTS roadmap_baselines (
+    goal_id              TEXT PRIMARY KEY,
+    couple_id            TEXT NOT NULL,
+    anchor_month         DATE NOT NULL,             -- 출발 월 1일
+    anchor_net_worth_krw BIGINT NOT NULL,
+    price_growth         DOUBLE PRECISION NOT NULL, -- 확정 당시 필요 가격상승률
+    dividend_yield       DOUBLE PRECISION NOT NULL, -- 확정 당시 세후 배당수익률
+    years                JSONB NOT NULL DEFAULT '[]',
+    months               JSONB NOT NULL DEFAULT '[]',
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

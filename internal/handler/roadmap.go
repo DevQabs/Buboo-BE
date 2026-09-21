@@ -110,6 +110,11 @@ func (h *Handler) putRoadmapGoal(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// 목표가 바뀌면 옛 계획선은 의미가 없다. 다음 조회에서 새로 세운다.
+	if err := h.roadmapRepo.DeleteBaseline(r.Context(), saved.ID); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
 	respondJSON(w, http.StatusOK, saved)
 }
 
@@ -188,6 +193,11 @@ func (h *Handler) putRoadmapAssumptions(w http.ResponseWriter, r *http.Request) 
 
 	saved, err := h.roadmapRepo.UpsertAssumptions(r.Context(), &req)
 	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	// 가정을 바꾸면 계획을 다시 세운다. 다음 조회에서 이번 달 자산으로 출발한다.
+	if err := h.roadmapRepo.DeleteBaseline(r.Context(), goal.ID); err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -486,6 +496,7 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 	a.DividendPlan = dividendPlanFrom(divCands)
 
 	// 기타 자산은 저장된 가정이 있으면 그 값을, 없으면 실제 보유분을 쓴다.
+	otherFromAssumption := a.OtherAssetsKRW != 0
 	if a.OtherAssetsKRW == 0 {
 		a.OtherAssetsKRW = assetKRW - liabilityKRW
 	}
@@ -508,9 +519,19 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 			fmt.Printf("warn: 순자산 스냅샷 적재 실패: %v\n", err)
 		}
 	}(newSnapshot(coupleID, stockKRW, assetKRW, liabilityKRW, now))
+
+	// 계획선은 확정된 기준선에서 읽는다. 실시간 순자산으로 다시 굴리면 목표가
+	// 자산을 따라 움직여, 계획보다 앞섰는지 뒤처졌는지 알 수 없다.
+	baseline, err := h.baselineFor(r, goal, *a, otherFromAssumption, snapshots, stockKRW, usdKRW, now)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	years, months := planFromBaseline(*baseline)
+
+	// 필요 수익률은 지금 순자산에서 목표까지 남은 기간에 필요한 값이다. 계획보다
+	// 뒤처지면 오르고 앞서면 내려간다. 계획선은 그대로 둔다.
 	growth := service.SolveRequiredGrowth(*a, stockKRW, usdKRW, goal.TargetKRW, now, goal.TargetDate, goal.BirthYear)
-	a.PriceGrowth = growth
-	years, months := service.Project(*a, stockKRW, usdKRW, now, goal.TargetDate, goal.BirthYear)
 
 	// 실적은 그 해 마지막 스냅샷으로 채운다.
 	actualByYear := make(map[int]int64, len(snapshots))
@@ -528,13 +549,6 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 			years[i].ActualNetWorthKRW = &actual
 		}
 	}
-
-	// 궤적은 다음 달부터 시작한다. 차트가 허공에서 시작하지 않도록 이번 달을
-	// 출발점으로 앞에 붙인다 — 계획과 실적이 같은 지점에서 갈라져 나간다.
-	months = append([]models.RoadmapMonthPoint{{
-		Month:                now.Format("2006-01"),
-		ProjectedNetWorthKRW: netWorthKRW,
-	}}, months...)
 
 	// 월별 실적은 그 달 스냅샷으로 채운다. 이번 달은 스냅샷이 없어도 지금
 	// 순자산을 쓴다.
@@ -565,6 +579,10 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 		out.Current.ProgressPct = float64(netWorthKRW) / float64(goal.TargetKRW) * 100
 	}
 	out.Current.DaysLeft = int(goal.TargetDate.Sub(now).Hours() / 24)
+	out.Plan.AnchorMonth = baseline.AnchorMonth.Format("2006-01")
+	out.Plan.AnchorNetWorthKRW = baseline.AnchorNetWorthKRW
+	out.Plan.PriceGrowth = baseline.PriceGrowth
+	out.Plan.TotalReturn = baseline.PriceGrowth + baseline.DividendYield
 	out.RequiredPriceGrowth = growth
 	out.CurrentDividendYield = service.DividendYield(*a, stockKRW, usdKRW, now.Year())
 	out.RequiredTotalReturn = growth + out.CurrentDividendYield
@@ -572,4 +590,56 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 	out.Months = months
 
 	respondJSON(w, http.StatusOK, out)
+}
+
+// baselineFor는 목표의 확정 계획선을 준다. 없으면 이번 달을 출발점으로 한 번
+// 만들어 저장한다.
+//
+// 출발 자산은 이번 달 스냅샷이 있으면 그 값을 쓴다. 스냅샷은 그 달에 처음 연
+// 뒤로 기록돼 있어, 지금 시세로 다시 재는 것보다 출발점이 덜 흔들린다.
+func (h *Handler) baselineFor(r *http.Request, goal *models.RoadmapGoal, a models.RoadmapAssumptions, otherFromAssumption bool, snapshots []models.NetWorthSnapshot, stockKRW int64, fx float64, now time.Time) (*models.RoadmapBaseline, error) {
+	ctx := r.Context()
+	if goal.ID == "" { // 기본 목표는 저장돼 있지 않다. 계획선을 달려면 먼저 저장한다
+		saved, err := h.ensureGoal(r, goal.CoupleID)
+		if err != nil {
+			return nil, err
+		}
+		goal = saved
+	}
+	b, err := h.roadmapRepo.Baseline(ctx, goal.ID)
+	if err != nil || b != nil {
+		return b, err
+	}
+
+	anchor := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	for _, s := range snapshots {
+		if s.SnapshotMonth.Equal(anchor) {
+			stockKRW = s.StockKRW
+			if !otherFromAssumption {
+				a.OtherAssetsKRW = s.AssetKRW - s.LiabilityKRW
+			}
+		}
+	}
+	nb := service.NewBaseline(a, stockKRW, fx, goal.TargetKRW, anchor, goal.TargetDate, goal.BirthYear)
+	nb.GoalID = goal.ID
+	nb.CoupleID = goal.CoupleID
+	if err := h.roadmapRepo.SaveBaseline(ctx, &nb); err != nil {
+		return nil, err
+	}
+	// 동시에 다른 요청이 먼저 저장했을 수 있다. 저장된 쪽을 따른다.
+	return h.roadmapRepo.Baseline(ctx, goal.ID)
+}
+
+// planFromBaseline은 확정 계획선을 화면용 궤적으로 편다. 출발 월을 첫 줄로
+// 붙여 계획과 실적이 같은 지점에서 갈라져 나가게 한다. 실적을 채우느라
+// 결과를 고쳐도 기준선은 그대로 남도록 복사해서 준다.
+func planFromBaseline(b models.RoadmapBaseline) ([]models.RoadmapYearRow, []models.RoadmapMonthPoint) {
+	years := append([]models.RoadmapYearRow(nil), b.Years...)
+	months := make([]models.RoadmapMonthPoint, 0, len(b.Months)+1)
+	months = append(months, models.RoadmapMonthPoint{
+		Month:                b.AnchorMonth.Format("2006-01"),
+		ProjectedNetWorthKRW: b.AnchorNetWorthKRW,
+	})
+	months = append(months, b.Months...)
+	return years, months
 }

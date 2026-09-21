@@ -945,6 +945,14 @@ type RoadmapProjection struct {
 		ProgressPct float64 `json:"progress_pct"`
 		DaysLeft    int     `json:"days_left"`
 	} `json:"current"`
+	// Plan은 확정된 계획선의 출발점과 그때 정한 수익률이다. 바뀌지 않는다.
+	Plan struct {
+		AnchorMonth       string  `json:"anchor_month"` // YYYY-MM
+		AnchorNetWorthKRW int64   `json:"anchor_net_worth_krw"`
+		PriceGrowth       float64 `json:"price_growth"`
+		TotalReturn       float64 `json:"total_return"`
+	} `json:"plan"`
+	// 아래 셋은 지금 순자산에서 목표까지 남은 기간에 필요한 값이다.
 	RequiredPriceGrowth  float64             `json:"required_price_growth"`
 	CurrentDividendYield float64             `json:"current_dividend_yield"`
 	RequiredTotalReturn  float64             `json:"required_total_return"`
