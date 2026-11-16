@@ -173,6 +173,18 @@ type PermissionRepository interface {
 	RemoveMember(ctx context.Context, userID string) error
 }
 
+// StorageRepository records every uploaded object so the app can keep the
+// whole bucket under STORAGE_LIMIT_BYTES (R2 has no cap of its own).
+type StorageRepository interface {
+	// Record inserts a row; an existing key is left as is.
+	Record(ctx context.Context, o models.StorageObject) error
+	// Get returns nil, nil when the key was never issued.
+	Get(ctx context.Context, key string) (*models.StorageObject, error)
+	Delete(ctx context.Context, keys []string) error
+	// TotalBytes sums the whole bucket (all couples — the free 10GB is per account).
+	TotalBytes(ctx context.Context) (int64, error)
+}
+
 // ─────────────────────────────────────────────
 //  Filter helpers (used by service / handler layers)
 // ─────────────────────────────────────────────

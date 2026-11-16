@@ -909,3 +909,11 @@ type RoadmapProjection struct {
 	Years                []RoadmapYearRow    `json:"years"`
 	Months               []RoadmapMonthPoint `json:"months"`
 }
+
+// StorageObject is one object in the media bucket (설계서 5절 용량 상한).
+type StorageObject struct {
+	Key       string
+	CoupleID  string
+	Purpose   string // diary|baby
+	SizeBytes int64
+}

@@ -57,6 +57,9 @@ type Handler struct {
 	owner          OwnershipChecker
 	internalSecret []byte
 	permRepo       repository.PermissionRepository
+	media          *supstorage.Client
+	storageRepo    repository.StorageRepository
+	storageLimit   int64
 }
 
 func New(
@@ -81,6 +84,9 @@ func New(
 	owner OwnershipChecker,
 	internalSecret []byte,
 	permRepo repository.PermissionRepository,
+	media *supstorage.Client,
+	storageRepo repository.StorageRepository,
+	storageLimit int64,
 ) *Handler {
 	return &Handler{
 		txRepo:         txRepo,
@@ -104,6 +110,9 @@ func New(
 		owner:          owner,
 		internalSecret: internalSecret,
 		permRepo:       permRepo,
+		media:          media,
+		storageRepo:    storageRepo,
+		storageLimit:   storageLimit,
 	}
 }
 
@@ -166,6 +175,10 @@ func (h *Handler) NewRouter() chi.Router {
 			r.Put("/{id}/permissions", h.putMemberPermissions)
 			r.Delete("/{id}", h.removeMember)
 		})
+
+		// 미디어 업로드 주소 — 목적별 메뉴 편집 권한은 핸들러가 본문을 보고 검사
+		r.Post("/media/upload-url", h.createUploadURL)
+		r.With(requireMenu()).Get("/storage/usage", h.storageUsage) // owner 전용
 
 		// 가계부
 		r.With(requireMenu("ledger")).Put("/couple", h.updateCouple)
