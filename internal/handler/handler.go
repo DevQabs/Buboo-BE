@@ -10,8 +10,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"os"
-	"path"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -23,7 +21,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	"github.com/google/uuid"
 	"github.com/yourname/couple-app/internal/auth"
 	"github.com/yourname/couple-app/internal/models"
 	"github.com/yourname/couple-app/internal/repository"
@@ -53,7 +50,6 @@ type Handler struct {
 	jwtSecret      []byte
 	allowOrigins   []string
 	uploadsDir     string
-	stor           *supstorage.SupabaseStorage
 	owner          OwnershipChecker
 	internalSecret []byte
 	permRepo       repository.PermissionRepository
@@ -80,7 +76,6 @@ func New(
 	jwtSecret []byte,
 	allowOrigins []string,
 	uploadsDir string,
-	stor *supstorage.SupabaseStorage,
 	owner OwnershipChecker,
 	internalSecret []byte,
 	permRepo repository.PermissionRepository,
@@ -106,7 +101,6 @@ func New(
 		jwtSecret:      jwtSecret,
 		allowOrigins:   allowOrigins,
 		uploadsDir:     uploadsDir,
-		stor:           stor,
 		owner:          owner,
 		internalSecret: internalSecret,
 		permRepo:       permRepo,
@@ -300,8 +294,8 @@ func (h *Handler) NewRouter() chi.Router {
 				r.Use(h.owned("diaries"))
 				r.Put("/", h.updateDiary)
 				r.Delete("/", h.deleteDiary)
-				r.Post("/photos", h.uploadDiaryPhoto)
-				r.Delete("/photos/{filename}", h.deleteDiaryPhoto)
+				r.Post("/photos", h.addDiaryPhoto)      // {key}
+				r.Delete("/photos", h.deleteDiaryPhoto) // ?key=
 			})
 		})
 	})
@@ -2526,6 +2520,9 @@ func (h *Handler) listDiaries(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+	for i := range diaries {
+		h.withPhotoURLs(r.Context(), &diaries[i])
+	}
 	respondJSON(w, http.StatusOK, diaries)
 }
 
@@ -2551,6 +2548,7 @@ func (h *Handler) createDiary(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+	h.withPhotoURLs(r.Context(), created)
 	respondJSON(w, http.StatusCreated, created)
 }
 
@@ -2577,6 +2575,7 @@ func (h *Handler) updateDiary(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+	h.withPhotoURLs(r.Context(), updated)
 	respondJSON(w, http.StatusOK, updated)
 }
 
@@ -2587,12 +2586,9 @@ func (h *Handler) deleteDiary(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-	for _, photoURL := range entry.Photos {
-		if h.stor != nil {
-			_ = h.stor.Delete(path.Base(photoURL))
-		} else {
-			_ = os.Remove(filepath.Join(h.uploadsDir, filepath.Base(photoURL)))
-		}
+	if err := h.removeObjects(r.Context(), entry.Photos); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
 	}
 	if err := h.diaryRepo.Delete(r.Context(), id); err != nil {
 		respondError(w, http.StatusInternalServerError, err)
@@ -2601,93 +2597,55 @@ func (h *Handler) deleteDiary(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) uploadDiaryPhoto(w http.ResponseWriter, r *http.Request) {
+// POST /api/diaries/{id}/photos {key} — 앱이 R2 에 직접 올린 사진을 일기에 붙인다.
+func (h *Handler) addDiaryPhoto(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id := chi.URLParam(r, "id")
-	if _, err := h.diaryRepo.GetByID(r.Context(), id); err != nil {
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	if _, err := h.confirmUpload(ctx, auth.CoupleIDFromCtx(ctx), "diary", req.Key); err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	diary, err := h.diaryRepo.GetByID(ctx, id)
+	if err != nil {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-	if err := r.ParseMultipartForm(10 << 20); err != nil {
-		respondError(w, http.StatusBadRequest, fmt.Errorf("file too large"))
-		return
-	}
-	file, header, err := r.FormFile("photo")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, fmt.Errorf("missing photo field"))
-		return
-	}
-	defer file.Close()
-
-	ext := filepath.Ext(header.Filename)
-	filename := uuid.NewString() + ext
-
-	data, err := io.ReadAll(file)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	var photoURL string
-	if h.stor != nil {
-		contentType := header.Header.Get("Content-Type")
-		if contentType == "" {
-			contentType = "image/jpeg"
-		}
-		publicURL, err := h.stor.Upload(filename, data, contentType)
-		if err != nil {
+	if !slices.Contains(diary.Photos, req.Key) {
+		if err := h.diaryRepo.AddPhoto(ctx, id, req.Key); err != nil {
 			respondError(w, http.StatusInternalServerError, err)
 			return
 		}
-		photoURL = publicURL
-	} else {
-		dst := filepath.Join(h.uploadsDir, filename)
-		if err := os.MkdirAll(h.uploadsDir, 0755); err != nil {
-			respondError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if err := os.WriteFile(dst, data, 0644); err != nil {
-			respondError(w, http.StatusInternalServerError, err)
-			return
-		}
-		photoURL = "/uploads/" + filename
 	}
-
-	if err := h.diaryRepo.AddPhoto(r.Context(), id, photoURL); err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	respondJSON(w, http.StatusCreated, map[string]string{"filename": filename, "url": photoURL})
+	respondJSON(w, http.StatusCreated, map[string]string{"key": req.Key, "url": h.mediaURL(ctx, req.Key)})
 }
 
+// DELETE /api/diaries/{id}/photos?key=... — 키(또는 이전 전 URL)가 이 일기 것일 때만 지운다.
 func (h *Handler) deleteDiaryPhoto(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id := chi.URLParam(r, "id")
-	filename := path.Base(chi.URLParam(r, "filename"))
+	key := r.URL.Query().Get("key")
 
-	diary, err := h.diaryRepo.GetByID(r.Context(), id)
+	diary, err := h.diaryRepo.GetByID(ctx, id)
 	if err != nil {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-
-	photoURL := "/uploads/" + filename
-	if h.stor != nil {
-		photoURL = h.stor.PublicURL(filename)
-	}
-	if !slices.Contains(diary.Photos, photoURL) {
+	if !slices.Contains(diary.Photos, key) {
 		respondError(w, http.StatusNotFound, fmt.Errorf("not found"))
 		return
 	}
-
-	if h.stor != nil {
-		if err := h.stor.Delete(filename); err != nil {
-			respondError(w, http.StatusInternalServerError, err)
-			return
-		}
-	} else {
-		_ = os.Remove(filepath.Join(h.uploadsDir, filename))
+	if err := h.removeObjects(ctx, []string{key}); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
 	}
-
-	if err := h.diaryRepo.DeletePhoto(r.Context(), id, photoURL); err != nil {
+	if err := h.diaryRepo.DeletePhoto(ctx, id, key); err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -100,5 +101,31 @@ func TestUploadRoutes(t *testing.T) {
 	}
 	if got := do(h, "grand", http.MethodGet, "/api/storage/usage", "").Code; got != http.StatusForbidden {
 		t.Errorf("사용량은 owner 전용: got %d", got)
+	}
+}
+
+func TestMediaURLWithoutStorage(t *testing.T) {
+	h := &Handler{}
+	ctx := context.Background()
+	legacy := "https://ref.supabase.co/storage/v1/object/public/diary-photos/a.jpg"
+	if got := h.mediaURL(ctx, legacy); got != legacy {
+		t.Errorf("이전 전 공개 URL 은 그대로: %q", got)
+	}
+	if got := h.mediaURL(ctx, "/uploads/a.jpg"); got != "/uploads/a.jpg" {
+		t.Errorf("로컬 업로드 경로는 그대로: %q", got)
+	}
+	if got := h.mediaURL(ctx, "c1/diary/a.jpg"); got != "" {
+		t.Errorf("저장소가 없으면 키는 빈 주소: %q", got)
+	}
+	d := &models.DiaryEntry{Photos: []string{legacy, "c1/diary/a.jpg"}}
+	h.withPhotoURLs(ctx, d)
+	if len(d.PhotoURLs) != 2 || d.PhotoURLs[0] != legacy {
+		t.Errorf("photo_urls 는 photos 와 같은 순서·길이: %v", d.PhotoURLs)
+	}
+	if err := h.removeObjects(ctx, []string{legacy, "/uploads/a.jpg"}); err != nil {
+		t.Errorf("옛 값만 있으면 저장소 없이도 삭제 통과: %v", err)
+	}
+	if err := h.removeObjects(ctx, []string{"c1/diary/a.jpg"}); err == nil {
+		t.Errorf("키를 지우려는데 저장소가 없으면 오류")
 	}
 }

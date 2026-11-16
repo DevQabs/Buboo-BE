@@ -95,26 +95,7 @@ func main() {
 		log.Fatalf("STORAGE_LIMIT_BYTES 는 양의 정수(바이트)여야 합니다: %q", os.Getenv("STORAGE_LIMIT_BYTES"))
 	}
 
-	// ── S3-compatible Storage ─────────────────────────────────────────────────
-	var stor *storage.SupabaseStorage
-	s3Endpoint := os.Getenv("S3_ENDPOINT")
-	s3AccessKey := os.Getenv("S3_ACCESS_KEY_ID")
-	s3SecretKey := os.Getenv("S3_SECRET_ACCESS_KEY")
-	s3Bucket := envOr("S3_BUCKET", "diary-photos")
-	s3PublicBase := os.Getenv("S3_PUBLIC_BASE")
-	if s3Endpoint != "" && s3AccessKey != "" && s3SecretKey != "" {
-		stor = storage.New(s3Endpoint, s3AccessKey, s3SecretKey, s3Bucket, s3PublicBase)
-		log.Println("✅ S3 Storage 연결 성공")
-	} else {
-		log.Println("⚠️  S3 Storage 미설정 — 로컬 파일 업로드 사용")
-	}
-
-	uploadsDir := filepath.Join(dataDir, "uploads")
-	if stor == nil {
-		if err := os.MkdirAll(uploadsDir, 0755); err != nil {
-			log.Fatalf("uploads 디렉토리 생성 실패: %v", err)
-		}
-	}
+	uploadsDir := filepath.Join(dataDir, "uploads") // 이전 전 로컬 사진 표시용(읽기 전용)
 
 	// ── Services ──────────────────────────────────────────────────────────────
 	priceSvc := service.NewPriceService()
@@ -124,7 +105,7 @@ func main() {
 	r := handler.New(
 		txRepo, stockRepo, stxRepo, userRepo, assetRepo,
 		feRepo, divRepo, scheduleRepo, diaryRepo, catRepo,
-		inviteRepo, roadmapRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, stor, ownerRepo, internalSecret, permRepo, media, storageRepo, storageLimit,
+		inviteRepo, roadmapRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, ownerRepo, internalSecret, permRepo, media, storageRepo, storageLimit,
 	).NewRouter()
 
 	srv := &http.Server{

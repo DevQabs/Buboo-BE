@@ -67,8 +67,9 @@ type DiaryEntry struct {
 	UserID    string    `json:"user_id"`
 	Date      string    `json:"date"` // YYYY-MM-DD
 	Content   string    `json:"content"`
-	Photos    []string  `json:"photos"` // filenames under uploads/
-	Mood      string    `json:"mood"`   // "happy"|"good"|"normal"|"sad"|"tired"
+	Photos    []string  `json:"photos"`     // 저장소 객체 키 (이전 전 옛 값은 공개 URL)
+	PhotoURLs []string  `json:"photo_urls"` // 응답 때만: photos 와 같은 순서의 표시용 주소
+	Mood      string    `json:"mood"`       // "happy"|"good"|"normal"|"sad"|"tired"
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

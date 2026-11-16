@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/yourname/couple-app/internal/auth"
 	"github.com/yourname/couple-app/internal/models"
+	supstorage "github.com/yourname/couple-app/internal/storage"
 )
 
 // 업로드 규칙 (설계서 5절). GB 는 십진(10^9) — 무료 10GB 보다 작게 잡는 쪽.
@@ -148,4 +150,86 @@ func (h *Handler) storageUsage(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]int64{
 		"used_bytes": used, "limit_bytes": h.storageLimit, "warn_bytes": storageWarnBytes,
 	})
+}
+
+// isLegacyPhoto: 이전 전 값(Supabase 공개 URL, 로컬 /uploads/...). 키가 아니다.
+func isLegacyPhoto(p string) bool {
+	return strings.Contains(p, "://") || strings.HasPrefix(p, "/")
+}
+
+// mediaURL turns a stored value into an address <img>/<video> can load:
+// keys get a 1-hour presigned GET (signed locally); legacy values pass through.
+func (h *Handler) mediaURL(ctx context.Context, key string) string {
+	if isLegacyPhoto(key) {
+		return key
+	}
+	if h.media == nil {
+		return ""
+	}
+	u, err := h.media.PresignGet(ctx, key, presignGetTTL)
+	if err != nil {
+		return ""
+	}
+	return u
+}
+
+func (h *Handler) withPhotoURLs(ctx context.Context, d *models.DiaryEntry) {
+	d.PhotoURLs = make([]string, len(d.Photos))
+	for i, p := range d.Photos {
+		d.PhotoURLs[i] = h.mediaURL(ctx, p)
+	}
+}
+
+// confirmUpload checks a key sent back after a direct upload: issued to this
+// couple for this purpose (prefix + storage_objects row) and really in the
+// bucket with the requested size.
+func (h *Handler) confirmUpload(ctx context.Context, coupleID, purpose, key string) (*models.StorageObject, error) {
+	if !keyBelongs(coupleID, purpose, key) {
+		return nil, errors.New("잘못된 파일 키입니다")
+	}
+	o, err := h.storageRepo.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if o == nil || o.CoupleID != coupleID || o.Purpose != purpose {
+		return nil, errors.New("잘못된 파일 키입니다")
+	}
+	if h.media == nil {
+		return nil, errors.New("저장소가 설정되지 않았습니다")
+	}
+	size, err := h.media.Head(ctx, key)
+	if errors.Is(err, supstorage.ErrNotFound) {
+		return nil, errors.New("업로드가 끝나지 않았습니다")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if size != o.SizeBytes {
+		_ = h.removeObjects(ctx, []string{key})
+		return nil, errors.New("올린 파일 크기가 요청과 다릅니다")
+	}
+	return o, nil
+}
+
+// removeObjects deletes bucket objects first, then their storage_objects rows.
+// Legacy values are skipped: the user deletes the Supabase originals by hand.
+func (h *Handler) removeObjects(ctx context.Context, keys []string) error {
+	var owned []string
+	for _, k := range keys {
+		if !isLegacyPhoto(k) {
+			owned = append(owned, k)
+		}
+	}
+	if len(owned) == 0 {
+		return nil
+	}
+	if h.media == nil {
+		return errors.New("저장소가 설정되지 않았습니다")
+	}
+	for _, k := range owned {
+		if err := h.media.Delete(ctx, k); err != nil {
+			return err
+		}
+	}
+	return h.storageRepo.Delete(ctx, owned)
 }
