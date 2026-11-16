@@ -8,10 +8,17 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/yourname/couple-app/internal/models"
 )
+
+// ErrDuplicate 는 유니크 제약에 걸린 저장이다. 고정비를 같은 날 두 번 반영하면 난다.
+var ErrDuplicate = errors.New("duplicate")
+
+// ErrNotFound 는 대상 행이 없다(이미 지웠거나 다른 그룹 것).
+var ErrNotFound = errors.New("not found")
 
 // ─────────────────────────────────────────────
 //  Transaction Repository
@@ -77,6 +84,10 @@ type StockRepository interface {
 	Reorder(ctx context.Context, coupleID string, ids []string) error
 
 	// Delete removes a stock asset by ID.
+	// Trade locks the row (SELECT ... FOR UPDATE), lets apply change it, then in the
+	// same DB transaction saves it — or deletes it when quantity reaches 0 — and
+	// appends the log apply returns (nil = no log). Any error rolls everything back.
+	Trade(ctx context.Context, id, coupleID string, apply func(a *models.StockAsset) (*models.StockTransaction, error)) (*models.StockAsset, error)
 	Delete(ctx context.Context, id string) error
 
 	// GetPriceSnapshot returns the latest stored price for a symbol.
@@ -222,8 +233,8 @@ type DividendRepository interface {
 	// Create persists a new dividend event.
 	Create(ctx context.Context, d *models.DividendEvent) (*models.DividendEvent, error)
 
-	// MarkApplied sets is_applied=true after generating a ledger entry.
-	MarkApplied(ctx context.Context, id string) error
+	// MarkApplied sets is_applied=true and remembers the ledger transaction it created.
+	MarkApplied(ctx context.Context, id, txID string) error
 
 	// Delete removes a dividend event by ID.
 	Delete(ctx context.Context, id string) error

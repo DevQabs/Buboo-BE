@@ -22,7 +22,7 @@ func NewPgDividendRepository(db *pgxpool.Pool) *PgDividendRepository {
 const divCols = `id, couple_id, user_id, stock_asset_id, symbol, exchange, name,
 	quantity, amount_per_share, currency, total_amount, tax_rate, after_tax_amount,
 	usd_krw_rate, amount_krw, ex_dividend_date, payment_date,
-	is_applied, memo, created_at, updated_at`
+	is_applied, memo, created_at, updated_at, transaction_id`
 
 func scanDiv(row interface{ Scan(dest ...any) error }) (*models.DividendEvent, error) {
 	var d models.DividendEvent
@@ -35,7 +35,7 @@ func scanDiv(row interface{ Scan(dest ...any) error }) (*models.DividendEvent, e
 		&d.TotalAmount, &d.TaxRate, &d.AfterTaxAmount,
 		&d.USDKRWRate, &d.AmountKRW,
 		&exDate, &d.PaymentDate,
-		&d.IsApplied, &d.Memo, &d.CreatedAt, &d.UpdatedAt,
+		&d.IsApplied, &d.Memo, &d.CreatedAt, &d.UpdatedAt, &d.TransactionID,
 	); err != nil {
 		return nil, err
 	}
@@ -107,9 +107,9 @@ func (r *PgDividendRepository) Create(ctx context.Context, d *models.DividendEve
 	return d, nil
 }
 
-func (r *PgDividendRepository) MarkApplied(ctx context.Context, id string) error {
+func (r *PgDividendRepository) MarkApplied(ctx context.Context, id, txID string) error {
 	tag, err := r.db.Exec(ctx,
-		`UPDATE dividends SET is_applied = TRUE, updated_at = NOW() WHERE id = $1`, id)
+		`UPDATE dividends SET is_applied = TRUE, transaction_id = $2, updated_at = NOW() WHERE id = $1`, id, txID)
 	if err != nil {
 		return err
 	}

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -304,6 +305,22 @@ func (h *Handler) NewRouter() chi.Router {
 
 func (h *Handler) listTransactions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	// 가계부 기간(월 시작일 반영): /api/summary 와 같은 [start_date, end_date)
+	if s, e := q.Get("start_date"), q.Get("end_date"); s != "" && e != "" {
+		start, err1 := time.Parse("2006-01-02", s)
+		end, err2 := time.Parse("2006-01-02", e)
+		if err1 != nil || err2 != nil {
+			respondError(w, http.StatusBadRequest, fmt.Errorf("invalid date format: use YYYY-MM-DD"))
+			return
+		}
+		txns, err := h.txRepo.ListByDateRange(r.Context(), auth.CoupleIDFromCtx(r.Context()), start, end)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
+		respondJSON(w, http.StatusOK, txns)
+		return
+	}
 	yearStr, monthStr := q.Get("year"), q.Get("month")
 	if yearStr != "" && monthStr != "" {
 		year, errY := strconv.Atoi(yearStr)
@@ -404,15 +421,47 @@ func (h *Handler) getTransaction(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, tx)
 }
 
+// mergeTransaction 은 본문에 있는 필드만 기존 거래에 덮어쓴다. 빠진 필드는 그대로다.
+// JSON 왕복으로 복사해, 포인터·슬라이스 필드가 기존 거래와 메모리를 공유하지 않게 한다.
+func mergeTransaction(existing *models.Transaction, body io.Reader) (*models.Transaction, error) {
+	b, err := json.Marshal(existing)
+	if err != nil {
+		return nil, err
+	}
+	var merged models.Transaction
+	if err := json.Unmarshal(b, &merged); err != nil {
+		return nil, err
+	}
+	if err := json.NewDecoder(body).Decode(&merged); err != nil {
+		return nil, err
+	}
+	merged.ID, merged.CoupleID, merged.CreatedAt = existing.ID, existing.CoupleID, existing.CreatedAt
+	return &merged, nil
+}
+
 func (h *Handler) updateTransaction(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	var tx models.Transaction
-	if err := json.NewDecoder(r.Body).Decode(&tx); err != nil {
+	ctx := r.Context()
+	existing, err := h.txRepo.GetByID(ctx, chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusNotFound, err)
+		return
+	}
+	tx, err := mergeTransaction(existing, r.Body)
+	if err != nil {
 		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
 		return
 	}
-	tx.ID = id
-	updated, err := h.txRepo.Update(r.Context(), &tx)
+	if existing.Type == "saving" || tx.Type == "saving" {
+		if tx.Type != existing.Type || !reflect.DeepEqual(tx.SavingLink, existing.SavingLink) {
+			respondError(w, http.StatusBadRequest, fmt.Errorf("저축 연결은 바꿀 수 없습니다. 지우고 다시 추가해 주세요"))
+			return
+		}
+		if err := h.savingSvc.ResizeSaving(ctx, existing, tx.Amount); err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	updated, err := h.txRepo.Update(ctx, tx)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -421,9 +470,20 @@ func (h *Handler) updateTransaction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteTransaction(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id := chi.URLParam(r, "id")
-	if err := h.txRepo.Delete(r.Context(), id); err != nil {
+	tx, err := h.txRepo.GetByID(ctx, id)
+	if err != nil {
 		respondError(w, http.StatusNotFound, err)
+		return
+	}
+	// 거래를 먼저 지운다. 원복이 실패해도 다시 눌러 두 번 원복되는 일이 없다.
+	if err := h.txRepo.Delete(ctx, id); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := h.savingSvc.RevertSaving(ctx, tx); err != nil {
+		respondError(w, http.StatusInternalServerError, fmt.Errorf("거래는 지웠지만 연결 자산을 되돌리지 못했습니다: %w", err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -507,11 +567,7 @@ func (h *Handler) calendarSummary(w http.ResponseWriter, r *http.Request) {
 		if !fe.IsActive {
 			continue
 		}
-		// Clamp day to 28 for months with fewer days.
-		day := fe.DayOfMonth
-		if day > 28 {
-			day = 28
-		}
+		day := clampDay(year, month, fe.DayOfMonth)
 		dateKey := fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 		events = append(events, models.CalendarEvent{
 			Date:   dateKey,
@@ -756,13 +812,13 @@ func (h *Handler) deleteStock(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, err)
 			return
 		}
-		hasSell, _ := h.stxRepo.HasSellInYear(r.Context(), auth.CoupleIDFromCtx(r.Context()), asset.Symbol, time.Now().Year())
+		hasSell, _ := h.stxRepo.HasSellInYear(r.Context(), auth.CoupleIDFromCtx(r.Context()), asset.Symbol, time.Now().In(models.KST).Year())
 		if hasSell {
 			// 409 signals the frontend to show the tax-warning modal
 			respondJSON(w, http.StatusConflict, map[string]interface{}{
 				"tax_warning":           true,
 				"has_sell_current_year": true,
-				"year":                  time.Now().Year(),
+				"year":                  time.Now().In(models.KST).Year(),
 			})
 			return
 		}
@@ -794,8 +850,29 @@ func (h *Handler) reorderStocks(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// statusError 는 Trade 안에서 거부한 요청을 HTTP 상태와 함께 돌려준다.
+type statusError struct {
+	status int
+	err    error
+}
+
+func (e statusError) Error() string { return e.err.Error() }
+
+func respondTradeError(w http.ResponseWriter, err error) {
+	var se statusError
+	switch {
+	case errors.As(err, &se):
+		respondError(w, se.status, se.err)
+	case errors.Is(err, repository.ErrNotFound):
+		respondError(w, http.StatusNotFound, fmt.Errorf("not found"))
+	default:
+		respondError(w, http.StatusInternalServerError, err)
+	}
+}
+
 // buyStock — POST /api/stocks/{id}/buy
 // Increases quantity, recalculates weighted-average price, logs immutable transaction.
+// 잔고와 기록은 한 트랜잭션으로 저장된다. 기록이 실패하면 매수도 취소된다.
 func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id := chi.URLParam(r, "id")
@@ -810,15 +887,12 @@ func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	asset, err := h.stockRepo.GetByID(ctx, id)
+	// 환율 조회(네트워크)는 행 잠금을 잡기 전에 끝낸다. 통화는 바뀌지 않으므로 미리 읽는다.
+	pre, err := h.stockRepo.GetByID(ctx, id)
 	if err != nil {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-
-	// Weighted-average cost basis
-	newQty := asset.Quantity + req.Quantity
-	newAvg := (asset.Quantity*asset.AveragePrice + req.Quantity*req.Price) / newQty
 
 	// KRW weighted-average cost basis (uses exchange rate at time of purchase)
 	//
@@ -826,46 +900,46 @@ func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 	// 원화 칼럼에 넣으면 평단이 1,400분의 1로 기록된다 — MCD는 2026-06-08
 	// 환율 0 매수로 277원이 원화 평단이 됐고, 이후 매수와 섞여 18,620원으로
 	// 굳은 뒤 매도가 +72.6만원 이익으로 뒤집혔다.
-	fx, err := service.ResolveBuyFX(ctx, asset.Currency, req.ExchangeRate, h.priceSvc.FetchUSDKRW)
+	fx, err := service.ResolveBuyFX(ctx, pre.Currency, req.ExchangeRate, h.priceSvc.FetchUSDKRW)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
-	newAvgKRW := service.KRWAvgAfterBuy(asset.Currency,
-		asset.Quantity, asset.AveragePrice, asset.AvgKRWPrice, req.Quantity, req.Price, fx)
 
-	asset.Quantity = newQty
-	asset.AveragePrice = newAvg
-	asset.AvgKRWPrice = newAvgKRW
+	coupleID := auth.CoupleIDFromCtx(ctx)
+	updated, err := h.stockRepo.Trade(ctx, id, coupleID, func(asset *models.StockAsset) (*models.StockTransaction, error) {
+		// Weighted-average cost basis
+		newQty := asset.Quantity + req.Quantity
+		newAvg := (asset.Quantity*asset.AveragePrice + req.Quantity*req.Price) / newQty
 
-	updated, err := h.stockRepo.Update(ctx, asset)
+		newAvgKRW := service.KRWAvgAfterBuy(asset.Currency,
+			asset.Quantity, asset.AveragePrice, asset.AvgKRWPrice, req.Quantity, req.Price, fx)
+
+		asset.Quantity = newQty
+		asset.AveragePrice = newAvg
+		asset.AvgKRWPrice = newAvgKRW
+
+		return &models.StockTransaction{
+			CoupleID:         coupleID,
+			UserID:           asset.UserID,
+			StockAssetID:     asset.ID,
+			Symbol:           asset.Symbol,
+			Exchange:         asset.Exchange,
+			Name:             asset.Name,
+			Type:             models.StockTxBuy,
+			Quantity:         req.Quantity,
+			Price:            req.Price,
+			Currency:         asset.Currency,
+			AvgPriceAtTx:     newAvg,
+			ExchangeRateAtTx: fx,
+			Memo:             req.Memo,
+			Source:           models.StockTxSourceTrade,
+		}, nil
+	})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
+		respondTradeError(w, err)
 		return
 	}
-
-	// Append immutable log
-	stx := &models.StockTransaction{
-		CoupleID:         auth.CoupleIDFromCtx(r.Context()),
-		UserID:           asset.UserID,
-		StockAssetID:     asset.ID,
-		Symbol:           asset.Symbol,
-		Exchange:         asset.Exchange,
-		Name:             asset.Name,
-		Type:             models.StockTxBuy,
-		Quantity:         req.Quantity,
-		Price:            req.Price,
-		Currency:         asset.Currency,
-		AvgPriceAtTx:     newAvg,
-		RealizedPnL:      0,
-		ExchangeRateAtTx: fx,
-		Memo:             req.Memo,
-	}
-	if _, err := h.stxRepo.Create(ctx, stx); err != nil {
-		// Log failure is non-fatal for the user — asset is already updated
-		fmt.Printf("warn: stx log failed: %v\n", err)
-	}
-
 	respondJSON(w, http.StatusOK, updated)
 }
 
@@ -886,79 +960,63 @@ func (h *Handler) sellStock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	asset, err := h.stockRepo.GetByID(ctx, id)
-	if err != nil {
-		respondError(w, http.StatusNotFound, err)
-		return
-	}
-	if req.Quantity > asset.Quantity {
-		respondError(w, http.StatusBadRequest, fmt.Errorf("sell quantity (%.4f) exceeds holdings (%.4f)", req.Quantity, asset.Quantity))
-		return
-	}
-
-	// Realized P&L always stored in KRW.
-	//
-	// USD 종목은 원화 취득가가 성해야 원화 손익을 낼 수 있다. 취득가가
-	// 손상됐는데 조용히 달러 손익을 기록하면, 그 값이 KRW로 간주되어
-	// 양도소득세가 1,386배 어긋난다. 그래서 계산 대신 매도를 막는다.
+	coupleID := auth.CoupleIDFromCtx(ctx)
 	var realizedPnL float64
-	if asset.Currency == "USD" {
-		if req.ExchangeRate <= 0 {
-			respondError(w, http.StatusBadRequest, fmt.Errorf("매도 환율이 필요합니다"))
-			return
+	var symbol string
+	updated, err := h.stockRepo.Trade(ctx, id, coupleID, func(asset *models.StockAsset) (*models.StockTransaction, error) {
+		if req.Quantity > asset.Quantity {
+			return nil, statusError{http.StatusBadRequest, fmt.Errorf("sell quantity (%.4f) exceeds holdings (%.4f)", req.Quantity, asset.Quantity)}
 		}
-		if err := service.ValidateKRWCostBasis(asset.AveragePrice, asset.AvgKRWPrice); err != nil {
-			respondError(w, http.StatusUnprocessableEntity, err)
-			return
+
+		// Realized P&L always stored in KRW.
+		//
+		// USD 종목은 원화 취득가가 성해야 원화 손익을 낼 수 있다. 취득가가
+		// 손상됐는데 조용히 달러 손익을 기록하면, 그 값이 KRW로 간주되어
+		// 양도소득세가 1,386배 어긋난다. 그래서 계산 대신 매도를 막는다.
+		if asset.Currency == "USD" {
+			if req.ExchangeRate <= 0 {
+				return nil, statusError{http.StatusBadRequest, fmt.Errorf("매도 환율이 필요합니다")}
+			}
+			if err := service.ValidateKRWCostBasis(asset.AveragePrice, asset.AvgKRWPrice); err != nil {
+				return nil, statusError{http.StatusUnprocessableEntity, err}
+			}
+			// (매도단가 × 환율 - KRW평균매입가) × 수량
+			realizedPnL = (req.Price*req.ExchangeRate - asset.AvgKRWPrice) * req.Quantity
+		} else {
+			realizedPnL = (req.Price - asset.AveragePrice) * req.Quantity
 		}
-		// (매도단가 × 환율 - KRW평균매입가) × 수량
-		realizedPnL = (req.Price*req.ExchangeRate - asset.AvgKRWPrice) * req.Quantity
-	} else {
-		realizedPnL = (req.Price - asset.AveragePrice) * req.Quantity
-	}
-
-	// Append immutable log BEFORE mutating state
-	stx := &models.StockTransaction{
-		CoupleID:         auth.CoupleIDFromCtx(r.Context()),
-		UserID:           asset.UserID,
-		StockAssetID:     asset.ID,
-		Symbol:           asset.Symbol,
-		Exchange:         asset.Exchange,
-		Name:             asset.Name,
-		Type:             models.StockTxSell,
-		Quantity:         req.Quantity,
-		Price:            req.Price,
-		Currency:         asset.Currency,
-		AvgPriceAtTx:     asset.AveragePrice,
-		RealizedPnL:      realizedPnL,
-		ExchangeRateAtTx: req.ExchangeRate,
-		Memo:             req.Memo,
-	}
-	if _, err := h.stxRepo.Create(ctx, stx); err != nil {
-		fmt.Printf("warn: stx log failed: %v\n", err)
-	}
-
-	newQty := asset.Quantity - req.Quantity
-
-	if newQty == 0 {
-		// 잔고 0 → 포트폴리오에서 즉시 제거 (이력은 보존)
-		if err := h.stockRepo.Delete(ctx, id); err != nil {
-			respondError(w, http.StatusInternalServerError, err)
-			return
+		symbol = asset.Symbol
+		log := &models.StockTransaction{
+			CoupleID:         coupleID,
+			UserID:           asset.UserID,
+			StockAssetID:     asset.ID,
+			Symbol:           asset.Symbol,
+			Exchange:         asset.Exchange,
+			Name:             asset.Name,
+			Type:             models.StockTxSell,
+			Quantity:         req.Quantity,
+			Price:            req.Price,
+			Currency:         asset.Currency,
+			AvgPriceAtTx:     asset.AveragePrice,
+			RealizedPnL:      realizedPnL,
+			ExchangeRateAtTx: req.ExchangeRate,
+			Memo:             req.Memo,
+			Source:           models.StockTxSourceTrade,
 		}
+		// 평단은 그대로(평균법). 0 이 되면 Trade 가 종목을 지운다 — 기록은 남는다.
+		asset.Quantity -= req.Quantity
+		return log, nil
+	})
+	if err != nil {
+		respondTradeError(w, err)
+		return
+	}
+	if updated.Quantity <= 0 {
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"removed":      true,
 			"realized_pnl": realizedPnL,
-			"symbol":       asset.Symbol,
+			"symbol":       symbol,
 		})
-		return
-	}
-
-	// avg_price stays the same after sell (average cost method)
-	asset.Quantity = newQty
-	updated, err := h.stockRepo.Update(ctx, asset)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -977,7 +1035,7 @@ func (h *Handler) taxCheck(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-	year := time.Now().Year()
+	year := time.Now().In(models.KST).Year()
 	hasSell, err := h.stxRepo.HasSellInYear(r.Context(), auth.CoupleIDFromCtx(r.Context()), asset.Symbol, year)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
@@ -993,7 +1051,7 @@ func (h *Handler) taxCheck(w http.ResponseWriter, r *http.Request) {
 // Returns realized P&L and estimated 22% tax aggregated by symbol.
 func (h *Handler) annualTax(w http.ResponseWriter, r *http.Request) {
 	yearStr := r.URL.Query().Get("year")
-	year := time.Now().Year()
+	year := time.Now().In(models.KST).Year()
 	if yearStr != "" {
 		if y, err := strconv.Atoi(yearStr); err == nil {
 			year = y
@@ -1156,7 +1214,7 @@ func (h *Handler) portfolio(w http.ResponseWriter, r *http.Request) {
 	// 지금 전량 매도하면 낼 양도소득세. 기본공제 250만원은 인별·연 1회라
 	// 올해 이미 실현한 손익까지 통산해야 공제가 두 번 적용되지 않는다.
 	var estimatedTaxKRW float64
-	realized, err := h.stxRepo.AnnualGainsByUser(ctx, coupleID, time.Now().Year())
+	realized, err := h.stxRepo.AnnualGainsByUser(ctx, coupleID, time.Now().In(models.KST).Year())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -1658,6 +1716,36 @@ func (h *Handler) listDividends(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, divs)
 }
 
+type dividendCalc struct {
+	TaxRate, Total, AfterTax, Rate float64
+	AmountKRW                      int64
+}
+
+// calcDividend 는 세율 기본값과 환율을 정해 배당 금액을 계산한다. 미국 배당에
+// 환율이 없으면 현재 환율을 쓰고, 그마저 없으면 오류다 — 달러를 원으로 적으면
+// 수입이 1,400분의 1로 기록된다.
+func calcDividend(req models.CreateDividendRequest, fetchRate func() (float64, error)) (dividendCalc, error) {
+	c := dividendCalc{TaxRate: 0.154, Rate: req.USDKRWRate} // US 배당소득세 기본값 15.4%
+	if req.TaxRate != nil && *req.TaxRate >= 0 {
+		c.TaxRate = *req.TaxRate
+	}
+	c.Total = req.Quantity * req.AmountPerShare
+	c.AfterTax = c.Total * (1 - c.TaxRate)
+	if strings.ToUpper(req.Currency) != "USD" {
+		c.AmountKRW = int64(math.Round(c.AfterTax))
+		return c, nil
+	}
+	if c.Rate <= 0 {
+		rate, err := fetchRate()
+		if err != nil || rate <= 0 {
+			return c, fmt.Errorf("환율을 가져오지 못했습니다. 환율을 입력해 주세요")
+		}
+		c.Rate = rate
+	}
+	c.AmountKRW = int64(math.Round(c.AfterTax * c.Rate))
+	return c, nil
+}
+
 // createDividend: POST /api/dividends
 // Computes derived fields (total_amount, after_tax_amount, amount_krw) server-side
 // so they are always consistent and stored for later ledger creation.
@@ -1685,17 +1773,10 @@ func (h *Handler) createDividend(w http.ResponseWriter, r *http.Request) {
 	if req.Currency == "" {
 		req.Currency = "USD"
 	}
-	if req.TaxRate <= 0 {
-		req.TaxRate = 0.154 // US 배당소득세 기본값 15.4%
-	}
-
-	total := req.Quantity * req.AmountPerShare
-	afterTax := total * (1 - req.TaxRate)
-	var amountKRW int64
-	if strings.ToUpper(req.Currency) == "USD" && req.USDKRWRate > 0 {
-		amountKRW = int64(afterTax * req.USDKRWRate)
-	} else {
-		amountKRW = int64(afterTax)
+	c, err := calcDividend(req, func() (float64, error) { return h.priceSvc.FetchUSDKRW(r.Context()) })
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
 	}
 
 	d := &models.DividendEvent{
@@ -1708,11 +1789,11 @@ func (h *Handler) createDividend(w http.ResponseWriter, r *http.Request) {
 		Quantity:       req.Quantity,
 		AmountPerShare: req.AmountPerShare,
 		Currency:       req.Currency,
-		TotalAmount:    total,
-		TaxRate:        req.TaxRate,
-		AfterTaxAmount: afterTax,
-		USDKRWRate:     req.USDKRWRate,
-		AmountKRW:      amountKRW,
+		TotalAmount:    c.Total,
+		TaxRate:        c.TaxRate,
+		AfterTaxAmount: c.AfterTax,
+		USDKRWRate:     c.Rate,
+		AmountKRW:      c.AmountKRW,
 		ExDividendDate: req.ExDividendDate,
 		PaymentDate:    req.PaymentDate,
 		Memo:           req.Memo,
@@ -1733,9 +1814,25 @@ func (h *Handler) createDividend(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteDividend(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id := chi.URLParam(r, "id")
-	if err := h.divRepo.Delete(r.Context(), id); err != nil {
+	d, err := h.divRepo.GetByID(ctx, id)
+	if err != nil {
 		respondError(w, http.StatusNotFound, err)
+		return
+	}
+	// 연결된 가계부 수입을 먼저 지운다. 실패하면 배당이 남아 재시도할 수 있고,
+	// 사용자가 이미 지웠으면 할 일이 없다.
+	if d.TransactionID != "" {
+		if _, err := h.txRepo.GetByID(ctx, d.TransactionID); err == nil {
+			if err := h.txRepo.Delete(ctx, d.TransactionID); err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+	}
+	if err := h.divRepo.Delete(ctx, id); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1765,10 +1862,15 @@ func (h *Handler) applyDividendToLedger(ctx context.Context, d *models.DividendE
 		IsFixed:       false,
 		Tags:          []string{"배당", d.Symbol},
 	}
-	if _, err := h.txRepo.Create(ctx, tx); err != nil {
+	created, err := h.txRepo.Create(ctx, tx)
+	if err != nil {
 		return err
 	}
-	return h.divRepo.MarkApplied(ctx, d.ID)
+	if err := h.divRepo.MarkApplied(ctx, d.ID, created.ID); err != nil {
+		return err
+	}
+	d.IsApplied, d.TransactionID = true, created.ID
+	return nil
 }
 
 // applyDividend: POST /api/dividends/{id}/apply (kept for backward compatibility)
@@ -1793,7 +1895,7 @@ func (h *Handler) applyDividend(w http.ResponseWriter, r *http.Request) {
 // dividendSummary: GET /api/dividends/summary?year=2026&month=6
 func (h *Handler) dividendSummary(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	year := time.Now().Year()
+	year := time.Now().In(models.KST).Year()
 	if y := q.Get("year"); y != "" {
 		if v, err := strconv.Atoi(y); err == nil {
 			year = v
@@ -1867,8 +1969,8 @@ func (h *Handler) createFixedExpense(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
 		return
 	}
-	if req.Title == "" || req.Amount <= 0 || req.DayOfMonth < 1 || req.DayOfMonth > 28 {
-		respondError(w, http.StatusBadRequest, fmt.Errorf("title, amount, and day_of_month(1-28) are required"))
+	if req.Title == "" || req.Amount <= 0 || req.DayOfMonth < 1 || req.DayOfMonth > 31 {
+		respondError(w, http.StatusBadRequest, fmt.Errorf("title, amount, and day_of_month(1-31) are required"))
 		return
 	}
 	if req.Currency == "" {
@@ -1936,6 +2038,10 @@ func (h *Handler) updateFixedExpense(w http.ResponseWriter, r *http.Request) {
 		existing.Amount = *req.Amount
 	}
 	if req.DayOfMonth != nil {
+		if *req.DayOfMonth < 1 || *req.DayOfMonth > 31 {
+			respondError(w, http.StatusBadRequest, fmt.Errorf("day_of_month 는 1~31 이어야 합니다"))
+			return
+		}
 		existing.DayOfMonth = *req.DayOfMonth
 	}
 	if req.IsActive != nil {
@@ -2047,6 +2153,12 @@ func (h *Handler) fixedExpenseSummary(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// clampDay 는 그 달에 없는 날(31일, 2월 30일 등)을 말일로 당긴다.
+func clampDay(year, month, day int) int {
+	last := time.Date(year, time.Month(month)+1, 0, 0, 0, 0, 0, time.UTC).Day()
+	return min(day, last)
+}
+
 // applyFixedExpenses creates Transaction records for unapplied fixed expenses.
 // Already-applied ones (linked via fixed_expense_id) are skipped.
 // Query params: year, month (default: current month).
@@ -2114,11 +2226,7 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Clamp day to valid range for the month.
-		day := fe.DayOfMonth
-		if day > 28 {
-			day = 28
-		}
+		day := clampDay(year, month, fe.DayOfMonth)
 		txDate := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
 		feID := fe.ID
 
@@ -2137,6 +2245,10 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 				Tags:           []string{"고정비", "저축"},
 				Link:           *fe.SavingLink,
 			})
+			if errors.Is(err, repository.ErrDuplicate) {
+				skipped++ // 다른 요청이 먼저 반영했다
+				continue
+			}
 			if err != nil {
 				respondError(w, http.StatusInternalServerError, err)
 				return
@@ -2165,6 +2277,10 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 		}
 
 		created, err := h.txRepo.Create(r.Context(), tx)
+		if errors.Is(err, repository.ErrDuplicate) {
+			skipped++ // 다른 요청이 먼저 반영했다
+			continue
+		}
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err)
 			return

@@ -19,6 +19,7 @@ import (
 type memStocks struct {
 	repository.StockRepository
 	rows map[string]models.StockAsset
+	logs []models.StockTransaction // Trade 가 남긴 매매 기록
 }
 
 func (m *memStocks) GetByID(_ context.Context, id string) (*models.StockAsset, error) {
@@ -38,6 +39,27 @@ func (m *memStocks) Create(_ context.Context, a *models.StockAsset) (*models.Sto
 func (m *memStocks) Update(_ context.Context, a *models.StockAsset) (*models.StockAsset, error) {
 	m.rows[a.ID] = *a
 	return a, nil
+}
+
+// Trade 는 PG 구현처럼 apply 결과를 저장(0 이하면 삭제)하고 기록을 남긴다.
+func (m *memStocks) Trade(_ context.Context, id, _ string, apply func(*models.StockAsset) (*models.StockTransaction, error)) (*models.StockAsset, error) {
+	a, ok := m.rows[id]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	log, err := apply(&a)
+	if err != nil {
+		return nil, err
+	}
+	if a.Quantity <= 0 {
+		delete(m.rows, id)
+	} else {
+		m.rows[id] = a
+	}
+	if log != nil {
+		m.logs = append(m.logs, *log)
+	}
+	return &a, nil
 }
 
 type memSTx struct {
@@ -83,7 +105,7 @@ func TestStockKRWBasis_CreateBuySell(t *testing.T) {
 	if got := st.rows["stock-1"].AvgKRWPrice; got != 21_800 {
 		t.Errorf("매수 후 원화 평단: want 21800, got %v", got)
 	}
-	if got := sx.rows[len(sx.rows)-1].ExchangeRateAtTx; got != 1500 {
+	if got := st.logs[len(st.logs)-1].ExchangeRateAtTx; got != 1500 {
 		t.Errorf("매수 로그 환율: want 1500, got %v", got)
 	}
 

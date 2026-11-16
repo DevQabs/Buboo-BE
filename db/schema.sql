@@ -325,3 +325,15 @@ CREATE TABLE IF NOT EXISTS roadmap_baselines (
     months               JSONB NOT NULL DEFAULT '[]',
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- 매매 기록 출처: 'trade'(매수·매도 화면) | 'saving'(저축 거래가 대신 산 매수).
+-- 로드맵 적립은 저축 거래 금액으로 세므로 'saving' 은 다시 세지 않는다.
+ALTER TABLE stock_transactions ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'trade';
+
+-- 배당이 만든 가계부 수입 거래 id. 배당을 지우면 함께 지운다.
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS transaction_id TEXT NOT NULL DEFAULT '';
+
+-- 같은 고정비를 같은 날 두 번 반영하지 못하게 한다(동시 요청 포함).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_transactions_fixed_expense_date
+    ON transactions(fixed_expense_id, date)
+ WHERE fixed_expense_id IS NOT NULL AND fixed_expense_id <> '';

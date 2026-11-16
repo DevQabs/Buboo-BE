@@ -6,6 +6,10 @@ package models
 
 import "time"
 
+// KST 는 한국 표준시. 서머타임이 없어 고정 오프셋이면 충분하고 tzdata 도 필요 없다.
+// 세금 연도·로드맵 월처럼 "한국 달력 기준" 경계를 자를 때 쓴다.
+var KST = time.FixedZone("KST", 9*60*60)
+
 // ─────────────────────────────────────────────
 //  Schedule (일정)
 // ─────────────────────────────────────────────
@@ -355,6 +359,12 @@ const (
 	StockTxSell StockTxType = "sell"
 )
 
+// StockTransaction.Source: 어디서 생긴 매매인가.
+const (
+	StockTxSourceTrade  = "trade"  // 매수·매도 화면
+	StockTxSourceSaving = "saving" // 저축 거래가 대신 산 매수. 로드맵 적립은 저축 거래 금액으로 센다
+)
+
 // StockTransaction is an immutable record of a single buy or sell event.
 // It is NEVER updated or deleted — it is the audit log for tax calculation.
 type StockTransaction struct {
@@ -372,6 +382,7 @@ type StockTransaction struct {
 	AvgPriceAtTx     float64     `json:"avg_price_at_tx"`     // avg cost basis at time of tx (original currency)
 	RealizedPnL      float64     `json:"realized_pnl"`        // sell only: always KRW
 	ExchangeRateAtTx float64     `json:"exchange_rate_at_tx"` // USD/KRW rate at time of tx; 0 = legacy data
+	Source           string      `json:"source"`              // StockTxSourceTrade | StockTxSourceSaving
 	Memo             string      `json:"memo"`
 	ExecutedAt       time.Time   `json:"executed_at"`
 	CreatedAt        time.Time   `json:"created_at"`
@@ -596,6 +607,7 @@ type DividendEvent struct {
 	ExDividendDate *time.Time `json:"ex_dividend_date,omitempty"` // 배당락일 (optional)
 	PaymentDate    time.Time  `json:"payment_date"`               // 지급일
 	IsApplied      bool       `json:"is_applied"`                 // 가계부에 수입으로 반영됐는지
+	TransactionID  string     `json:"transaction_id,omitempty"`   // 가계부에 만든 수입 거래 id. 배당 삭제 시 함께 지운다
 	Memo           string     `json:"memo"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
@@ -616,7 +628,7 @@ type CreateDividendRequest struct {
 	Quantity       float64    `json:"quantity"`
 	AmountPerShare float64    `json:"amount_per_share"`
 	Currency       string     `json:"currency"`
-	TaxRate        float64    `json:"tax_rate"` // defaults to 0.154
+	TaxRate        *float64   `json:"tax_rate"` // 없거나 음수면 0.154. 0 은 비과세로 그대로 쓴다
 	USDKRWRate     float64    `json:"usd_krw_rate"`
 	ExDividendDate *time.Time `json:"ex_dividend_date,omitempty"`
 	PaymentDate    time.Time  `json:"payment_date"`
