@@ -1741,11 +1741,8 @@ func (h *Handler) deleteDividend(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-	if err := h.divRepo.Delete(ctx, id); err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	// 가계부에 넣은 배당 수입도 지운다. 사용자가 이미 지웠으면 할 일이 없다.
+	// 연결된 가계부 수입을 먼저 지운다. 실패하면 배당이 남아 재시도할 수 있고,
+	// 사용자가 이미 지웠으면 할 일이 없다.
 	if d.TransactionID != "" {
 		if _, err := h.txRepo.GetByID(ctx, d.TransactionID); err == nil {
 			if err := h.txRepo.Delete(ctx, d.TransactionID); err != nil {
@@ -1753,6 +1750,10 @@ func (h *Handler) deleteDividend(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	if err := h.divRepo.Delete(ctx, id); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

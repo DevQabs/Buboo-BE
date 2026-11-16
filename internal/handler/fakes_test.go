@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/yourname/couple-app/internal/models"
 	"github.com/yourname/couple-app/internal/repository"
@@ -12,8 +11,8 @@ import (
 // 인터페이스를 내장해, 테스트가 쓰는 메서드만 구현한다. 안 쓴 메서드를 부르면 nil 패닉으로 드러난다.
 type fakeTxRepo struct {
 	repository.TransactionRepository
-	txs        map[string]*models.Transaction
-	start, end time.Time
+	txs    map[string]*models.Transaction
+	delErr error
 }
 
 func (f *fakeTxRepo) GetByID(_ context.Context, id string) (*models.Transaction, error) {
@@ -24,6 +23,9 @@ func (f *fakeTxRepo) GetByID(_ context.Context, id string) (*models.Transaction,
 }
 
 func (f *fakeTxRepo) Delete(_ context.Context, id string) error {
+	if f.delErr != nil {
+		return f.delErr
+	}
 	delete(f.txs, id)
 	return nil
 }

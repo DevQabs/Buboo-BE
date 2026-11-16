@@ -63,3 +63,21 @@ func TestDeleteDividend_가계부수입도지운다(t *testing.T) {
 		t.Error("배당으로 만든 가계부 수입이 남았다")
 	}
 }
+
+func TestDeleteDividend_수입삭제가실패하면배당을남긴다(t *testing.T) {
+	txs := &fakeTxRepo{txs: map[string]*models.Transaction{"txn-1": {ID: "txn-1"}}, delErr: errors.New("db down")}
+	divs := &fakeDivRepo{divs: map[string]*models.DividendEvent{"div-1": {ID: "div-1", TransactionID: "txn-1"}}}
+	h := &Handler{txRepo: txs, divRepo: divs}
+	r := chi.NewRouter()
+	r.Delete("/d/{id}", h.deleteDividend)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/d/div-1", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("500 이어야 한다: %d", rec.Code)
+	}
+	if _, ok := divs.divs["div-1"]; !ok {
+		t.Error("수입 삭제가 실패했는데 배당이 지워졌다")
+	}
+}
