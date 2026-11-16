@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"path"
 	"strings"
@@ -228,6 +229,7 @@ func (h *Handler) removeObjects(ctx context.Context, keys []string) error {
 	}
 	for _, k := range owned {
 		if err := h.media.Delete(ctx, k); err != nil {
+			log.Printf("R2 객체 삭제 실패 key=%s: %v", k, err)
 			return err
 		}
 	}

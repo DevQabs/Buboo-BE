@@ -2,10 +2,12 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/yourname/couple-app/internal/models"
 )
@@ -117,18 +119,37 @@ func (r *PgDiaryRepository) Update(ctx context.Context, d *models.DiaryEntry) (*
 	return d, nil
 }
 
-func (r *PgDiaryRepository) AddPhoto(ctx context.Context, id, photoURL string) error {
+// ErrPhotoInUse: the key is already attached to another diary. Deleting that
+// diary would remove the shared R2 object, so a key lives in one diary only.
+var ErrPhotoInUse = errors.New("이미 사용 중인 사진입니다")
+
+// AddPhoto appends key unless some diary already has it. Re-adding to the same
+// diary is a no-op (nil); another diary holding it gives ErrPhotoInUse.
+// ponytail: two concurrent attaches to different diaries can both pass NOT EXISTS (READ COMMITTED) — rare for two people; add a diary_photos(key UNIQUE) table if it shows up.
+func (r *PgDiaryRepository) AddPhoto(ctx context.Context, id, key string) error {
 	tag, err := r.db.Exec(ctx,
-		`UPDATE diaries SET photos = array_append(photos, $2), updated_at = NOW() WHERE id = $1`,
-		id, photoURL,
+		`UPDATE diaries SET photos = array_append(photos, $2), updated_at = NOW()
+		 WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM diaries WHERE $2 = ANY(photos))`,
+		id, key,
 	)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("diary %s not found", id)
+	if tag.RowsAffected() == 1 {
+		return nil
 	}
-	return nil
+	var holder string
+	err = r.db.QueryRow(ctx, `SELECT id FROM diaries WHERE $1 = ANY(photos) LIMIT 1`, key).Scan(&holder)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf("diary %s not found", id)
+	case err != nil:
+		return err
+	case holder == id:
+		return nil
+	default:
+		return ErrPhotoInUse
+	}
 }
 
 func (r *PgDiaryRepository) DeletePhoto(ctx context.Context, id, photoURL string) error {

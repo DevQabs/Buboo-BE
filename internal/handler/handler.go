@@ -2649,16 +2649,18 @@ func (h *Handler) addDiaryPhoto(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
-	diary, err := h.diaryRepo.GetByID(ctx, id)
-	if err != nil {
+	if _, err := h.diaryRepo.GetByID(ctx, id); err != nil {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-	if !slices.Contains(diary.Photos, req.Key) {
-		if err := h.diaryRepo.AddPhoto(ctx, id, req.Key); err != nil {
-			respondError(w, http.StatusInternalServerError, err)
-			return
-		}
+	// 같은 일기에 다시 붙이면 그대로 성공, 다른 일기가 쓰는 키면 409.
+	// diary 키는 {couple}/diary/ 접두사라 아기 기록 키(baby/)와 겹칠 수 없다.
+	if err := h.diaryRepo.AddPhoto(ctx, id, req.Key); errors.Is(err, repository.ErrPhotoInUse) {
+		respondError(w, http.StatusConflict, err)
+		return
+	} else if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
 	}
 	respondJSON(w, http.StatusCreated, map[string]string{"key": req.Key, "url": h.mediaURL(ctx, req.Key)})
 }
