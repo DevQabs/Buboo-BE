@@ -142,6 +142,22 @@ type InviteRepository interface {
 	ListInvitesByCouple(ctx context.Context, coupleID string) ([]models.Invite, error)
 }
 
+// PermissionRepository stores per-member menu levels (설계서 4.1).
+type PermissionRepository interface {
+	// Get returns the caller's permissions, or nil, nil when the user is not in
+	// that couple any more (removed member holding a still-valid token).
+	Get(ctx context.Context, userID, coupleID string) (*models.Permissions, error)
+
+	// ListByCouple returns userID -> menu -> level for every member with rows.
+	ListByCouple(ctx context.Context, coupleID string) (map[string]map[string]string, error)
+
+	// Replace overwrites all of a member's rows. Missing or hidden menus get no row.
+	Replace(ctx context.Context, userID string, levels map[string]string) error
+
+	// RemoveMember deletes a non-owner user; their rows go by ON DELETE CASCADE.
+	RemoveMember(ctx context.Context, userID string) error
+}
+
 // ─────────────────────────────────────────────
 //  Filter helpers (used by service / handler layers)
 // ─────────────────────────────────────────────

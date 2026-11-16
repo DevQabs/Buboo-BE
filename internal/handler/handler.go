@@ -55,6 +55,7 @@ type Handler struct {
 	stor           *supstorage.SupabaseStorage
 	owner          OwnershipChecker
 	internalSecret []byte
+	permRepo       repository.PermissionRepository
 }
 
 func New(
@@ -78,6 +79,7 @@ func New(
 	stor *supstorage.SupabaseStorage,
 	owner OwnershipChecker,
 	internalSecret []byte,
+	permRepo repository.PermissionRepository,
 ) *Handler {
 	return &Handler{
 		txRepo:         txRepo,
@@ -100,6 +102,7 @@ func New(
 		stor:           stor,
 		owner:          owner,
 		internalSecret: internalSecret,
+		permRepo:       permRepo,
 	}
 }
 
@@ -142,25 +145,28 @@ func (h *Handler) NewRouter() chi.Router {
 	// ── Protected routes (JWT required) ───────────────────────────────────────
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireAuth(h.jwtSecret))
-		r.Post("/api/auth/invite", h.createInvite)
+		r.Use(h.loadPermissions)
+		r.With(requireMenu()).Post("/api/auth/invite", h.createInvite) // owner 전용
 	})
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(auth.RequireAuth(h.jwtSecret))
+		r.Use(h.loadPermissions)
 
-		// Users
+		// 구성원 누구나
 		r.Get("/users", h.listUsers)
-
-		// Couple
 		r.Get("/couple", h.getCouple)
-		r.Put("/couple", h.updateCouple)
+		r.Get("/me/permissions", h.myPermissions)
 
-		// Categories
-		r.Get("/categories", h.getCategories)
-		r.Put("/categories", h.updateCategories)
+		// 가계부
+		r.With(requireMenu("ledger")).Put("/couple", h.updateCouple)
+		r.With(requireMenu("ledger")).Get("/categories", h.getCategories)
+		r.With(requireMenu("ledger")).Put("/categories", h.updateCategories)
+		r.With(requireMenu("ledger")).Get("/summary", h.monthlySummary)
 
 		// Transactions
 		r.Route("/transactions", func(r chi.Router) {
+			r.Use(requireMenu("ledger"))
 			r.Get("/", h.listTransactions)
 			r.Post("/", h.createTransaction)
 			// Calendar summary — must be registered BEFORE /{id} to avoid routing conflict
@@ -173,11 +179,9 @@ func (h *Handler) NewRouter() chi.Router {
 			})
 		})
 
-		// Monthly summary
-		r.Get("/summary", h.monthlySummary)
-
-		// Stocks
+		// Stocks — 가계부(저축 연동·배당·고정비)도 목록을 읽는다. 쓰기는 assets edit 만.
 		r.Route("/stocks", func(r chi.Router) {
+			r.Use(requireMenu("assets", "ledger"))
 			r.Get("/", h.listStocks)
 			r.Post("/", h.createStock)
 			r.Get("/portfolio", h.portfolio)
@@ -200,6 +204,7 @@ func (h *Handler) NewRouter() chi.Router {
 
 		// Roadmap (목표 순자산 플랜)
 		r.Route("/roadmap", func(r chi.Router) {
+			r.Use(requireMenu("roadmap"))
 			r.Get("/projection", h.roadmapProjection) // 화면 전체 데이터
 			r.Get("/goal", h.getRoadmapGoal)
 			r.Put("/goal", h.putRoadmapGoal)
@@ -208,8 +213,9 @@ func (h *Handler) NewRouter() chi.Router {
 			r.Post("/snapshot", h.postNetWorthSnapshot) // 이번 달 실적 적재
 		})
 
-		// Other Assets (부동산, 예금, 가상화폐, 차량 등)
+		// Other Assets (부동산, 예금, 가상화폐, 차량 등) — 읽기는 가계부도 허용
 		r.Route("/assets", func(r chi.Router) {
+			r.Use(requireMenu("assets", "ledger"))
 			r.Get("/", h.listAssets)        // 전체 목록 (type 쿼리 파라미터로 필터)
 			r.Post("/", h.createAsset)      // 자산 추가
 			r.Get("/net-worth", h.netWorth) // 순자산 요약 (주식 + 기타)
@@ -226,6 +232,7 @@ func (h *Handler) NewRouter() chi.Router {
 
 		// Dividends (배당 이벤트)
 		r.Route("/dividends", func(r chi.Router) {
+			r.Use(requireMenu("ledger"))
 			r.Get("/", h.listDividends)          // 전체 목록
 			r.Post("/", h.createDividend)        // 배당 이벤트 등록
 			r.Get("/summary", h.dividendSummary) // 연간 요약 (?year=)
@@ -238,6 +245,7 @@ func (h *Handler) NewRouter() chi.Router {
 
 		// Fixed Expenses (고정비 — 정기 지출 템플릿)
 		r.Route("/fixed-expenses", func(r chi.Router) {
+			r.Use(requireMenu("ledger"))
 			r.Get("/", h.listFixedExpenses)
 			r.Post("/", h.createFixedExpense)
 			r.Get("/summary", h.fixedExpenseSummary)
@@ -251,6 +259,7 @@ func (h *Handler) NewRouter() chi.Router {
 
 		// Schedules (일정)
 		r.Route("/schedules", func(r chi.Router) {
+			r.Use(requireMenu("schedule"))
 			r.Get("/", h.listSchedules)
 			r.Post("/", h.createSchedule)
 			r.Route("/{id}", func(r chi.Router) {
@@ -262,6 +271,7 @@ func (h *Handler) NewRouter() chi.Router {
 
 		// Diaries (일기)
 		r.Route("/diaries", func(r chi.Router) {
+			r.Use(requireMenu("diary"))
 			r.Get("/", h.listDiaries)
 			r.Post("/", h.createDiary)
 			r.Route("/{id}", func(r chi.Router) {

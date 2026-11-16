@@ -72,6 +72,7 @@ func main() {
 	inviteRepo   = repository.NewPgInviteRepository(pool)
 	roadmapRepo  = repository.NewPgRoadmapRepository(pool)
 	ownerRepo    = repository.NewPgOwnership(pool)
+	permRepo := repository.NewPgPermissionRepository(pool)
 
 	// ── S3-compatible Storage ─────────────────────────────────────────────────
 	var stor *storage.SupabaseStorage
@@ -102,7 +103,7 @@ func main() {
 	r := handler.New(
 		txRepo, stockRepo, stxRepo, userRepo, assetRepo,
 		feRepo, divRepo, scheduleRepo, diaryRepo, catRepo,
-		inviteRepo, roadmapRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, stor, ownerRepo, internalSecret,
+		inviteRepo, roadmapRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, stor, ownerRepo, internalSecret, permRepo,
 	).NewRouter()
 
 	srv := &http.Server{
