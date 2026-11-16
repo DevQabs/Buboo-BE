@@ -44,7 +44,6 @@ type Handler struct {
 	scheduleRepo   repository.ScheduleRepository
 	diaryRepo      repository.DiaryRepository
 	catRepo        repository.CategoryRepository
-	fridgeRepo     repository.FridgeRepository
 	inviteRepo     repository.InviteRepository
 	roadmapRepo    repository.RoadmapRepository
 	priceSvc       *service.PriceService
@@ -68,7 +67,6 @@ func New(
 	scheduleRepo repository.ScheduleRepository,
 	diaryRepo repository.DiaryRepository,
 	catRepo repository.CategoryRepository,
-	fridgeRepo repository.FridgeRepository,
 	inviteRepo repository.InviteRepository,
 	roadmapRepo repository.RoadmapRepository,
 	priceSvc *service.PriceService,
@@ -91,7 +89,6 @@ func New(
 		scheduleRepo:   scheduleRepo,
 		diaryRepo:      diaryRepo,
 		catRepo:        catRepo,
-		fridgeRepo:     fridgeRepo,
 		inviteRepo:     inviteRepo,
 		roadmapRepo:    roadmapRepo,
 		priceSvc:       priceSvc,
@@ -272,22 +269,6 @@ func (h *Handler) NewRouter() chi.Router {
 				r.Delete("/", h.deleteDiary)
 				r.Post("/photos", h.uploadDiaryPhoto)
 				r.Delete("/photos/{filename}", h.deleteDiaryPhoto)
-			})
-		})
-
-		// Fridge (냉장고 관리)
-		r.Route("/fridge", func(r chi.Router) {
-			r.Get("/items", h.listFridgeItems)
-			r.Post("/items", h.createFridgeItem)
-			r.Route("/items/{id}", func(r chi.Router) {
-				r.Put("/", h.updateFridgeItem)
-				r.Delete("/", h.deleteFridgeItem)
-			})
-			r.Get("/side-dishes", h.listSideDishes)
-			r.Post("/side-dishes", h.createSideDish)
-			r.Route("/side-dishes/{id}", func(r chi.Router) {
-				r.Put("/", h.updateSideDish)
-				r.Delete("/", h.deleteSideDish)
 			})
 		})
 	})
@@ -2579,243 +2560,4 @@ func (h *Handler) updateCategories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, updated)
-}
-
-// ─────────────────────────────────────────────
-//  Fridge — Items (식재료)
-// ─────────────────────────────────────────────
-
-func (h *Handler) listFridgeItems(w http.ResponseWriter, r *http.Request) {
-	items, err := h.fridgeRepo.ListItems(r.Context(), auth.CoupleIDFromCtx(r.Context()))
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	respondJSON(w, http.StatusOK, items)
-}
-
-func (h *Handler) createFridgeItem(w http.ResponseWriter, r *http.Request) {
-	var req models.CreateFridgeItemRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
-		return
-	}
-
-	item := &models.FridgeItem{
-		CoupleID: auth.CoupleIDFromCtx(r.Context()),
-		Name:     req.Name,
-		Quantity: req.Quantity,
-		Location: req.Location,
-		Category: req.Category,
-		Memo:     req.Memo,
-	}
-
-	if req.ExpiryDate != nil && *req.ExpiryDate != "" {
-		t, err := time.Parse("2006-01-02", *req.ExpiryDate)
-		if err != nil {
-			respondError(w, http.StatusBadRequest, fmt.Errorf("invalid expiry_date: use YYYY-MM-DD"))
-			return
-		}
-		item.ExpiryDate = &t
-	}
-
-	created, err := h.fridgeRepo.CreateItem(r.Context(), item)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	respondJSON(w, http.StatusCreated, created)
-}
-
-func (h *Handler) updateFridgeItem(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	var req models.UpdateFridgeItemRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
-		return
-	}
-
-	items, err := h.fridgeRepo.ListItems(r.Context(), auth.CoupleIDFromCtx(r.Context()))
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	var existing *models.FridgeItem
-	for i := range items {
-		if items[i].ID == id {
-			existing = &items[i]
-			break
-		}
-	}
-	if existing == nil {
-		respondError(w, http.StatusNotFound, fmt.Errorf("fridge item %s not found", id))
-		return
-	}
-
-	if req.Name != nil {
-		existing.Name = *req.Name
-	}
-	if req.Quantity != nil {
-		existing.Quantity = *req.Quantity
-	}
-	if req.Location != nil {
-		existing.Location = *req.Location
-	}
-	if req.Category != nil {
-		existing.Category = *req.Category
-	}
-	if req.Memo != nil {
-		existing.Memo = *req.Memo
-	}
-	if req.ExpiryDate != nil {
-		if *req.ExpiryDate == "" {
-			existing.ExpiryDate = nil
-		} else {
-			t, err := time.Parse("2006-01-02", *req.ExpiryDate)
-			if err != nil {
-				respondError(w, http.StatusBadRequest, fmt.Errorf("invalid expiry_date: use YYYY-MM-DD"))
-				return
-			}
-			existing.ExpiryDate = &t
-		}
-	}
-
-	updated, err := h.fridgeRepo.UpdateItem(r.Context(), existing)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	respondJSON(w, http.StatusOK, updated)
-}
-
-func (h *Handler) deleteFridgeItem(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if err := h.fridgeRepo.DeleteItem(r.Context(), id); err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	respondJSON(w, http.StatusOK, map[string]string{"deleted": id})
-}
-
-// ─────────────────────────────────────────────
-//  Fridge — Side Dishes (반찬)
-// ─────────────────────────────────────────────
-
-func (h *Handler) listSideDishes(w http.ResponseWriter, r *http.Request) {
-	dishes, err := h.fridgeRepo.ListDishes(r.Context(), auth.CoupleIDFromCtx(r.Context()))
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	respondJSON(w, http.StatusOK, dishes)
-}
-
-func (h *Handler) createSideDish(w http.ResponseWriter, r *http.Request) {
-	var req models.CreateSideDishRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
-		return
-	}
-
-	madeAt, err := time.Parse("2006-01-02", req.MadeAt)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid made_at: use YYYY-MM-DD"))
-		return
-	}
-
-	dish := &models.SideDish{
-		CoupleID: auth.CoupleIDFromCtx(r.Context()),
-		Name:     req.Name,
-		MadeAt:   madeAt,
-		Location: req.Location,
-		Memo:     req.Memo,
-	}
-
-	if req.ExpiresAt != nil && *req.ExpiresAt != "" {
-		t, err := time.Parse("2006-01-02", *req.ExpiresAt)
-		if err != nil {
-			respondError(w, http.StatusBadRequest, fmt.Errorf("invalid expires_at: use YYYY-MM-DD"))
-			return
-		}
-		dish.ExpiresAt = &t
-	}
-
-	created, err := h.fridgeRepo.CreateDish(r.Context(), dish)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	respondJSON(w, http.StatusCreated, created)
-}
-
-func (h *Handler) updateSideDish(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	var req models.UpdateSideDishRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
-		return
-	}
-
-	dishes, err := h.fridgeRepo.ListDishes(r.Context(), auth.CoupleIDFromCtx(r.Context()))
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	var existing *models.SideDish
-	for i := range dishes {
-		if dishes[i].ID == id {
-			existing = &dishes[i]
-			break
-		}
-	}
-	if existing == nil {
-		respondError(w, http.StatusNotFound, fmt.Errorf("side dish %s not found", id))
-		return
-	}
-
-	if req.Name != nil {
-		existing.Name = *req.Name
-	}
-	if req.Location != nil {
-		existing.Location = *req.Location
-	}
-	if req.Memo != nil {
-		existing.Memo = *req.Memo
-	}
-	if req.MadeAt != nil {
-		t, err := time.Parse("2006-01-02", *req.MadeAt)
-		if err != nil {
-			respondError(w, http.StatusBadRequest, fmt.Errorf("invalid made_at: use YYYY-MM-DD"))
-			return
-		}
-		existing.MadeAt = t
-	}
-	if req.ExpiresAt != nil {
-		if *req.ExpiresAt == "" {
-			existing.ExpiresAt = nil
-		} else {
-			t, err := time.Parse("2006-01-02", *req.ExpiresAt)
-			if err != nil {
-				respondError(w, http.StatusBadRequest, fmt.Errorf("invalid expires_at: use YYYY-MM-DD"))
-				return
-			}
-			existing.ExpiresAt = &t
-		}
-	}
-
-	updated, err := h.fridgeRepo.UpdateDish(r.Context(), existing)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	respondJSON(w, http.StatusOK, updated)
-}
-
-func (h *Handler) deleteSideDish(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if err := h.fridgeRepo.DeleteDish(r.Context(), id); err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	respondJSON(w, http.StatusOK, map[string]string{"deleted": id})
 }

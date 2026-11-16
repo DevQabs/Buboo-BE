@@ -49,7 +49,6 @@ func main() {
 		scheduleRepo repository.ScheduleRepository
 		diaryRepo    repository.DiaryRepository
 		catRepo      repository.CategoryRepository
-		fridgeRepo   repository.FridgeRepository
 		inviteRepo   repository.InviteRepository
 		roadmapRepo  repository.RoadmapRepository
 		ownerRepo    *repository.PgOwnership
@@ -70,7 +69,6 @@ func main() {
 	scheduleRepo = repository.NewPgScheduleRepository(pool)
 	diaryRepo    = repository.NewPgDiaryRepository(pool)
 	catRepo      = repository.NewPgCategoryRepository(pool)
-	fridgeRepo   = repository.NewPgFridgeRepository(pool)
 	inviteRepo   = repository.NewPgInviteRepository(pool)
 	roadmapRepo  = repository.NewPgRoadmapRepository(pool)
 	ownerRepo    = repository.NewPgOwnership(pool)
@@ -103,7 +101,7 @@ func main() {
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := handler.New(
 		txRepo, stockRepo, stxRepo, userRepo, assetRepo,
-		feRepo, divRepo, scheduleRepo, diaryRepo, catRepo, fridgeRepo,
+		feRepo, divRepo, scheduleRepo, diaryRepo, catRepo,
 		inviteRepo, roadmapRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, stor, ownerRepo, internalSecret,
 	).NewRouter()
 
