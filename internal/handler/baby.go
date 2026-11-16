@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/yourname/couple-app/internal/auth"
 	"github.com/yourname/couple-app/internal/models"
+	"github.com/yourname/couple-app/internal/repository"
 )
 
 func validDate(s string) bool {
@@ -110,6 +111,15 @@ func (h *Handler) mediaFromKeys(ctx context.Context, coupleID string, keys []str
 	return out, nil
 }
 
+// momentSaveError: 이미 다른 기록에 붙은 키는 409, 그 밖은 500.
+func momentSaveError(w http.ResponseWriter, err error) {
+	if errors.Is(err, repository.ErrMediaKeyUsed) {
+		respondError(w, http.StatusConflict, err)
+		return
+	}
+	respondError(w, http.StatusInternalServerError, err)
+}
+
 func (h *Handler) withMediaURLs(ctx context.Context, m *models.BabyMoment) {
 	for i := range m.Media {
 		m.Media[i].URL = h.mediaURL(ctx, m.Media[i].Key)
@@ -147,7 +157,7 @@ func (h *Handler) createMoment(w http.ResponseWriter, r *http.Request) {
 	}
 	m := &models.BabyMoment{UserID: auth.UserIDFromCtx(ctx), Date: req.Date, Content: req.Content, Media: media}
 	if err := h.babyRepo.CreateMoment(ctx, coupleID, m); err != nil {
-		respondError(w, http.StatusInternalServerError, err)
+		momentSaveError(w, err)
 		return
 	}
 	h.withMediaURLs(ctx, m)
@@ -174,7 +184,7 @@ func (h *Handler) updateMoment(w http.ResponseWriter, r *http.Request) {
 	}
 	m := &models.BabyMoment{ID: id, Date: req.Date, Content: req.Content}
 	if err := h.babyRepo.UpdateMoment(ctx, coupleID, m, add); err != nil {
-		respondError(w, http.StatusInternalServerError, err)
+		momentSaveError(w, err)
 		return
 	}
 	updated, err := h.babyRepo.GetMoment(ctx, id)

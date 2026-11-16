@@ -7,9 +7,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/yourname/couple-app/internal/models"
 )
+
+// ErrMediaKeyUsed: 이 파일 키가 이미 다른 기록에 붙어 있다(idx_baby_media_key).
+var ErrMediaKeyUsed = errors.New("이미 다른 기록에 붙은 파일입니다. 다시 올려 주세요")
 
 type PgBabyRepository struct{ db *pgxpool.Pool }
 
@@ -131,6 +135,10 @@ func insertMedia(ctx context.Context, tx pgx.Tx, coupleID, momentID string, medi
 			`INSERT INTO baby_media (id, moment_id, couple_id, kind, object_key, content_type, size_bytes, sort_order)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 			md.ID, momentID, coupleID, md.Kind, md.Key, md.ContentType, md.SizeBytes, md.SortOrder); err != nil {
+			if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "23505" &&
+				pgErr.ConstraintName == "idx_baby_media_key" {
+				return ErrMediaKeyUsed
+			}
 			return err
 		}
 	}

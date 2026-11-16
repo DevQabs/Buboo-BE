@@ -1,10 +1,15 @@
 package handler
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/yourname/couple-app/internal/models"
+	"github.com/yourname/couple-app/internal/repository"
 )
 
 func fp(v float64) *float64 { return &v }
@@ -81,5 +86,18 @@ func TestBabyRouteWiring(t *testing.T) {
 		if got := do(h, c.user, c.method, c.path, c.body).Code; got != http.StatusForbidden {
 			t.Errorf("%s %s %s: 403 이어야 한다, got %d", c.user, c.method, c.path, got)
 		}
+	}
+}
+
+func TestMomentSaveError(t *testing.T) {
+	rec := httptest.NewRecorder()
+	momentSaveError(rec, fmt.Errorf("insert: %w", repository.ErrMediaKeyUsed))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), repository.ErrMediaKeyUsed.Error()) {
+		t.Errorf("이미 붙은 키 = %d %s, want 409 + 문구", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	momentSaveError(rec, errors.New("db down"))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("그 밖의 오류 = %d, want 500", rec.Code)
 	}
 }
