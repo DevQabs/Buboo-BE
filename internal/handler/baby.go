@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -31,15 +32,24 @@ func validBaby(b models.Baby) error {
 	return nil
 }
 
-func validGrowth(g models.BabyGrowth) error {
+func validGrowth(g *models.BabyGrowth) error {
 	if !validDate(g.MeasuredOn) {
 		return errors.New("측정일 형식이 잘못됐습니다")
 	}
 	if g.HeightCm == nil && g.WeightKg == nil && g.HeadCm == nil {
 		return errors.New("키·몸무게·머리둘레 중 하나는 입력해 주세요")
 	}
-	for _, v := range []*float64{g.HeightCm, g.WeightKg, g.HeadCm} {
-		if v != nil && (*v <= 0 || *v >= 1000) { // NUMERIC(5,2) 상한
+	// 열 자릿수에 맞춰 먼저 반올림한다: 키·머리둘레 NUMERIC(5,1), 몸무게 NUMERIC(5,2).
+	// 몸무게 열은 999.99 까지라 반올림한 값이 1000 이상이면 넘친다 — 세 값 모두 0 초과 1000 미만만 받는다.
+	for _, f := range []struct {
+		v     *float64
+		scale float64
+	}{{g.HeightCm, 10}, {g.WeightKg, 100}, {g.HeadCm, 10}} {
+		if f.v == nil {
+			continue
+		}
+		*f.v = math.Round(*f.v*f.scale) / f.scale
+		if *f.v <= 0 || *f.v >= 1000 {
 			return errors.New("측정값이 범위를 벗어났습니다")
 		}
 	}
@@ -231,7 +241,7 @@ func decodeGrowth(r *http.Request) (models.BabyGrowth, error) {
 	if err := json.NewDecoder(r.Body).Decode(&g); err != nil {
 		return g, err
 	}
-	return g, validGrowth(g)
+	return g, validGrowth(&g)
 }
 
 func (h *Handler) createGrowth(w http.ResponseWriter, r *http.Request) {

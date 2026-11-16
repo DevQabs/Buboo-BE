@@ -26,18 +26,36 @@ func TestValidBaby(t *testing.T) {
 }
 
 func TestValidGrowth(t *testing.T) {
-	if err := validGrowth(models.BabyGrowth{MeasuredOn: "2026-11-16", WeightKg: fp(4.8)}); err != nil {
+	if err := validGrowth(&models.BabyGrowth{MeasuredOn: "2026-11-16", WeightKg: fp(4.8)}); err != nil {
 		t.Errorf("몸무게만 있어도 통과: %v", err)
 	}
 	for name, g := range map[string]models.BabyGrowth{
-		"측정값 없음": {MeasuredOn: "2026-11-16"},
-		"날짜 형식":  {MeasuredOn: "11/16", HeightCm: fp(56.2)},
-		"0 이하":   {MeasuredOn: "2026-11-16", HeightCm: fp(0)},
-		"자릿수 초과": {MeasuredOn: "2026-11-16", WeightKg: fp(1000)},
+		"측정값 없음":       {MeasuredOn: "2026-11-16"},
+		"날짜 형식":        {MeasuredOn: "11/16", HeightCm: fp(56.2)},
+		"0 이하":         {MeasuredOn: "2026-11-16", HeightCm: fp(0)},
+		"자릿수 초과":       {MeasuredOn: "2026-11-16", WeightKg: fp(1000)},
+		"반올림하면 1000":   {MeasuredOn: "2026-11-16", WeightKg: fp(999.996)},
+		"반올림하면 0":      {MeasuredOn: "2026-11-16", HeightCm: fp(0.04)},
+		"키 반올림하면 1000": {MeasuredOn: "2026-11-16", HeightCm: fp(999.96)},
 	} {
-		if validGrowth(g) == nil {
+		if validGrowth(&g) == nil {
 			t.Errorf("%s 는 거부해야 한다", name)
 		}
+	}
+}
+
+// 저장 전에 열 자릿수(NUMERIC(5,1)·(5,2))로 반올림한다.
+func TestValidGrowth_반올림(t *testing.T) {
+	g := models.BabyGrowth{MeasuredOn: "2026-11-16", HeightCm: fp(56.25), WeightKg: fp(4.567), HeadCm: fp(38.04)}
+	if err := validGrowth(&g); err != nil {
+		t.Fatal(err)
+	}
+	if *g.HeightCm != 56.3 || *g.WeightKg != 4.57 || *g.HeadCm != 38.0 {
+		t.Errorf("반올림 결과 = %v, %v, %v; want 56.3, 4.57, 38", *g.HeightCm, *g.WeightKg, *g.HeadCm)
+	}
+	w := models.BabyGrowth{MeasuredOn: "2026-11-16", WeightKg: fp(999.994)}
+	if err := validGrowth(&w); err != nil || *w.WeightKg != 999.99 {
+		t.Errorf("999.994 → 999.99 통과해야 한다: %v, %v", *w.WeightKg, err)
 	}
 }
 
