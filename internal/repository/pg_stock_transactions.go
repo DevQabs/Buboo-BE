@@ -85,7 +85,7 @@ func (r *PgStockTransactionRepository) ListBySymbol(ctx context.Context, coupleI
 }
 
 func (r *PgStockTransactionRepository) HasSellInYear(ctx context.Context, coupleID, symbol string, year int) (bool, error) {
-	start := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+	start := time.Date(year, 1, 1, 0, 0, 0, 0, models.KST)
 	end := start.AddDate(1, 0, 0)
 	row := r.db.QueryRow(ctx,
 		`SELECT EXISTS(
@@ -100,15 +100,16 @@ func (r *PgStockTransactionRepository) HasSellInYear(ctx context.Context, couple
 	return exists, nil
 }
 
+// 국내 상장 주식 매도는 대주주가 아니면 양도세 대상이 아니라 USD 만 센다.
 func (r *PgStockTransactionRepository) AnnualSummary(ctx context.Context, coupleID string, year int) ([]models.SymbolTaxSummary, error) {
-	start := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+	start := time.Date(year, 1, 1, 0, 0, 0, 0, models.KST)
 	end := start.AddDate(1, 0, 0)
 	rows, err := r.db.Query(ctx,
 		`SELECT symbol, exchange,
 		        COUNT(*) AS sell_count,
 		        SUM(realized_pnl) AS realized_pnl
 		 FROM stock_transactions
-		 WHERE couple_id=$1 AND type='sell'
+		 WHERE couple_id=$1 AND type='sell' AND currency='USD'
 		   AND executed_at >= $2 AND executed_at < $3
 		 GROUP BY symbol, exchange`,
 		coupleID, start, end)
@@ -134,15 +135,16 @@ func (r *PgStockTransactionRepository) AnnualSummary(ctx context.Context, couple
 // AnnualGainsByUser nets realized P&L per person for the given year.
 // GROUP BY user_id 가 한 사람 안에서 종목 간 손익을 통산한다 — 손실 종목이
 // 이익 종목을 상계하는 것이 실제 과세 방식이다.
+// 국내 상장 주식 매도는 대주주가 아니면 양도세 대상이 아니라 USD 만 센다.
 func (r *PgStockTransactionRepository) AnnualGainsByUser(ctx context.Context, coupleID string, year int) ([]models.UserGainRow, error) {
-	start := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+	start := time.Date(year, 1, 1, 0, 0, 0, 0, models.KST)
 	end := start.AddDate(1, 0, 0)
 	rows, err := r.db.Query(ctx,
 		`SELECT user_id,
 		        COUNT(*) AS sell_count,
 		        SUM(realized_pnl) AS realized_pnl
 		 FROM stock_transactions
-		 WHERE couple_id=$1 AND type='sell'
+		 WHERE couple_id=$1 AND type='sell' AND currency='USD'
 		   AND executed_at >= $2 AND executed_at < $3
 		 GROUP BY user_id
 		 ORDER BY user_id`,

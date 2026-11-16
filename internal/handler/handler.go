@@ -738,13 +738,13 @@ func (h *Handler) deleteStock(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, err)
 			return
 		}
-		hasSell, _ := h.stxRepo.HasSellInYear(r.Context(), auth.CoupleIDFromCtx(r.Context()), asset.Symbol, time.Now().Year())
+		hasSell, _ := h.stxRepo.HasSellInYear(r.Context(), auth.CoupleIDFromCtx(r.Context()), asset.Symbol, time.Now().In(models.KST).Year())
 		if hasSell {
 			// 409 signals the frontend to show the tax-warning modal
 			respondJSON(w, http.StatusConflict, map[string]interface{}{
 				"tax_warning":           true,
 				"has_sell_current_year": true,
-				"year":                  time.Now().Year(),
+				"year":                  time.Now().In(models.KST).Year(),
 			})
 			return
 		}
@@ -959,7 +959,7 @@ func (h *Handler) taxCheck(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-	year := time.Now().Year()
+	year := time.Now().In(models.KST).Year()
 	hasSell, err := h.stxRepo.HasSellInYear(r.Context(), auth.CoupleIDFromCtx(r.Context()), asset.Symbol, year)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
@@ -975,7 +975,7 @@ func (h *Handler) taxCheck(w http.ResponseWriter, r *http.Request) {
 // Returns realized P&L and estimated 22% tax aggregated by symbol.
 func (h *Handler) annualTax(w http.ResponseWriter, r *http.Request) {
 	yearStr := r.URL.Query().Get("year")
-	year := time.Now().Year()
+	year := time.Now().In(models.KST).Year()
 	if yearStr != "" {
 		if y, err := strconv.Atoi(yearStr); err == nil {
 			year = y
@@ -1138,7 +1138,7 @@ func (h *Handler) portfolio(w http.ResponseWriter, r *http.Request) {
 	// 지금 전량 매도하면 낼 양도소득세. 기본공제 250만원은 인별·연 1회라
 	// 올해 이미 실현한 손익까지 통산해야 공제가 두 번 적용되지 않는다.
 	var estimatedTaxKRW float64
-	realized, err := h.stxRepo.AnnualGainsByUser(ctx, coupleID, time.Now().Year())
+	realized, err := h.stxRepo.AnnualGainsByUser(ctx, coupleID, time.Now().In(models.KST).Year())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -1775,7 +1775,7 @@ func (h *Handler) applyDividend(w http.ResponseWriter, r *http.Request) {
 // dividendSummary: GET /api/dividends/summary?year=2026&month=6
 func (h *Handler) dividendSummary(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	year := time.Now().Year()
+	year := time.Now().In(models.KST).Year()
 	if y := q.Get("year"); y != "" {
 		if v, err := strconv.Atoi(y); err == nil {
 			year = v
