@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1655,6 +1656,17 @@ func (h *Handler) createDividend(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, fmt.Errorf("symbol, quantity, and amount_per_share are required"))
 		return
 	}
+	if req.StockAssetID != "" {
+		ok, err := h.owner.Owns(r.Context(), "stock_assets", req.StockAssetID, auth.CoupleIDFromCtx(r.Context()))
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !ok {
+			respondError(w, http.StatusNotFound, fmt.Errorf("not found"))
+			return
+		}
+	}
 	if req.Currency == "" {
 		req.Currency = "USD"
 	}
@@ -2505,17 +2517,29 @@ func (h *Handler) uploadDiaryPhoto(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) deleteDiaryPhoto(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	filename := chi.URLParam(r, "filename")
+	filename := path.Base(chi.URLParam(r, "filename"))
 
-	var photoURL string
+	diary, err := h.diaryRepo.GetByID(r.Context(), id)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err)
+		return
+	}
+
+	photoURL := "/uploads/" + filename
 	if h.stor != nil {
 		photoURL = h.stor.PublicURL(filename)
+	}
+	if !slices.Contains(diary.Photos, photoURL) {
+		respondError(w, http.StatusNotFound, fmt.Errorf("not found"))
+		return
+	}
+
+	if h.stor != nil {
 		if err := h.stor.Delete(filename); err != nil {
 			respondError(w, http.StatusInternalServerError, err)
 			return
 		}
 	} else {
-		photoURL = "/uploads/" + filename
 		_ = os.Remove(filepath.Join(h.uploadsDir, filename))
 	}
 

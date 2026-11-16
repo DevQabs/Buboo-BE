@@ -147,6 +147,9 @@ func (s *SavingService) applyStock(ctx context.Context, tx *models.Transaction, 
 		if err != nil {
 			return fmt.Errorf("stock %s not found: %w", link.LinkAssetID, err)
 		}
+		if asset.CoupleID != tx.CoupleID {
+			return fmt.Errorf("stock %s not found", link.LinkAssetID)
+		}
 		if link.AddStockQty <= 0 || link.AddStockPrice <= 0 {
 			return fmt.Errorf("add_stock_qty and add_stock_price must be > 0")
 		}
@@ -232,6 +235,9 @@ func (s *SavingService) applyOtherAsset(ctx context.Context, tx *models.Transact
 		asset, err := s.assetRepo.GetByID(ctx, link.LinkAssetID)
 		if err != nil {
 			return fmt.Errorf("other asset %s not found: %w", link.LinkAssetID, err)
+		}
+		if asset.CoupleID != tx.CoupleID {
+			return fmt.Errorf("other asset %s not found", link.LinkAssetID)
 		}
 		asset.ValueKRW += amountKRW
 		if _, err := s.assetRepo.Update(ctx, asset); err != nil {
