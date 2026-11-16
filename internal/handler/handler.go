@@ -34,26 +34,26 @@ import (
 // ─────────────────────────────────────────────
 
 type Handler struct {
-	txRepo       repository.TransactionRepository
-	stockRepo    repository.StockRepository
-	stxRepo      repository.StockTransactionRepository
-	userRepo     repository.UserRepository
-	assetRepo    repository.OtherAssetRepository
-	feRepo       repository.FixedExpenseRepository
-	divRepo      repository.DividendRepository
-	scheduleRepo repository.ScheduleRepository
-	diaryRepo    repository.DiaryRepository
-	catRepo      repository.CategoryRepository
-	fridgeRepo   repository.FridgeRepository
-	inviteRepo   repository.InviteRepository
-	roadmapRepo  repository.RoadmapRepository
-	priceSvc     *service.PriceService
-	savingSvc    *service.SavingService
-	jwtSecret    []byte
-	allowOrigins []string
-	uploadsDir   string
-	stor         *supstorage.SupabaseStorage
-	owner        OwnershipChecker
+	txRepo         repository.TransactionRepository
+	stockRepo      repository.StockRepository
+	stxRepo        repository.StockTransactionRepository
+	userRepo       repository.UserRepository
+	assetRepo      repository.OtherAssetRepository
+	feRepo         repository.FixedExpenseRepository
+	divRepo        repository.DividendRepository
+	scheduleRepo   repository.ScheduleRepository
+	diaryRepo      repository.DiaryRepository
+	catRepo        repository.CategoryRepository
+	fridgeRepo     repository.FridgeRepository
+	inviteRepo     repository.InviteRepository
+	roadmapRepo    repository.RoadmapRepository
+	priceSvc       *service.PriceService
+	savingSvc      *service.SavingService
+	jwtSecret      []byte
+	allowOrigins   []string
+	uploadsDir     string
+	stor           *supstorage.SupabaseStorage
+	owner          OwnershipChecker
 	internalSecret []byte
 }
 
@@ -81,26 +81,26 @@ func New(
 	internalSecret []byte,
 ) *Handler {
 	return &Handler{
-		txRepo:       txRepo,
-		stockRepo:    stockRepo,
-		stxRepo:      stxRepo,
-		userRepo:     userRepo,
-		assetRepo:    assetRepo,
-		feRepo:       feRepo,
-		divRepo:      divRepo,
-		scheduleRepo: scheduleRepo,
-		diaryRepo:    diaryRepo,
-		catRepo:      catRepo,
-		fridgeRepo:   fridgeRepo,
-		inviteRepo:   inviteRepo,
-		roadmapRepo:  roadmapRepo,
-		priceSvc:     priceSvc,
-		savingSvc:    savingSvc,
-		jwtSecret:    jwtSecret,
-		allowOrigins: allowOrigins,
-		uploadsDir:   uploadsDir,
-		stor:         stor,
-		owner:        owner,
+		txRepo:         txRepo,
+		stockRepo:      stockRepo,
+		stxRepo:        stxRepo,
+		userRepo:       userRepo,
+		assetRepo:      assetRepo,
+		feRepo:         feRepo,
+		divRepo:        divRepo,
+		scheduleRepo:   scheduleRepo,
+		diaryRepo:      diaryRepo,
+		catRepo:        catRepo,
+		fridgeRepo:     fridgeRepo,
+		inviteRepo:     inviteRepo,
+		roadmapRepo:    roadmapRepo,
+		priceSvc:       priceSvc,
+		savingSvc:      savingSvc,
+		jwtSecret:      jwtSecret,
+		allowOrigins:   allowOrigins,
+		uploadsDir:     uploadsDir,
+		stor:           stor,
+		owner:          owner,
 		internalSecret: internalSecret,
 	}
 }
