@@ -359,6 +359,12 @@ const (
 	StockTxSell StockTxType = "sell"
 )
 
+// StockTransaction.Source: 어디서 생긴 매매인가.
+const (
+	StockTxSourceTrade  = "trade"  // 매수·매도 화면
+	StockTxSourceSaving = "saving" // 저축 거래가 대신 산 매수. 로드맵 적립은 저축 거래 금액으로 센다
+)
+
 // StockTransaction is an immutable record of a single buy or sell event.
 // It is NEVER updated or deleted — it is the audit log for tax calculation.
 type StockTransaction struct {
@@ -376,6 +382,7 @@ type StockTransaction struct {
 	AvgPriceAtTx     float64     `json:"avg_price_at_tx"`     // avg cost basis at time of tx (original currency)
 	RealizedPnL      float64     `json:"realized_pnl"`        // sell only: always KRW
 	ExchangeRateAtTx float64     `json:"exchange_rate_at_tx"` // USD/KRW rate at time of tx; 0 = legacy data
+	Source           string      `json:"source"`              // StockTxSourceTrade | StockTxSourceSaving
 	Memo             string      `json:"memo"`
 	ExecutedAt       time.Time   `json:"executed_at"`
 	CreatedAt        time.Time   `json:"created_at"`

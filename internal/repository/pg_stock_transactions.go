@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/yourname/couple-app/internal/models"
 )
@@ -20,7 +21,7 @@ func NewPgStockTransactionRepository(db *pgxpool.Pool) *PgStockTransactionReposi
 
 const stxCols = `id, couple_id, user_id, stock_asset_id, symbol, exchange, name,
 	type, quantity, price, currency, avg_price_at_tx, realized_pnl,
-	memo, executed_at, created_at, exchange_rate_at_tx`
+	memo, executed_at, created_at, exchange_rate_at_tx, source`
 
 func scanSTx(row interface{ Scan(dest ...any) error }) (*models.StockTransaction, error) {
 	var t models.StockTransaction
@@ -29,35 +30,49 @@ func scanSTx(row interface{ Scan(dest ...any) error }) (*models.StockTransaction
 		&t.Symbol, &t.Exchange, &t.Name,
 		&t.Type, &t.Quantity, &t.Price, &t.Currency,
 		&t.AvgPriceAtTx, &t.RealizedPnL,
-		&t.Memo, &t.ExecutedAt, &t.CreatedAt, &t.ExchangeRateAtTx,
+		&t.Memo, &t.ExecutedAt, &t.CreatedAt, &t.ExchangeRateAtTx, &t.Source,
 	); err != nil {
 		return nil, err
 	}
 	return &t, nil
 }
 
-func (r *PgStockTransactionRepository) Create(ctx context.Context, tx *models.StockTransaction) (*models.StockTransaction, error) {
+// execer 는 풀과 트랜잭션을 둘 다 받는다. 같은 INSERT 를 Trade 의 트랜잭션 안에서도 쓴다.
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func insertSTx(ctx context.Context, db execer, tx *models.StockTransaction) error {
 	tx.ID = "stx-" + uuid.NewString()
 	now := time.Now().UTC()
 	tx.CreatedAt = now
 	if tx.ExecutedAt.IsZero() {
 		tx.ExecutedAt = now
 	}
-
-	_, err := r.db.Exec(ctx,
+	if tx.Source == "" {
+		tx.Source = models.StockTxSourceTrade
+	}
+	_, err := db.Exec(ctx,
 		`INSERT INTO stock_transactions
 		 (id, couple_id, user_id, stock_asset_id, symbol, exchange, name,
 		  type, quantity, price, currency, avg_price_at_tx, realized_pnl,
-		  memo, executed_at, created_at, exchange_rate_at_tx)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		  memo, executed_at, created_at, exchange_rate_at_tx, source)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 		tx.ID, tx.CoupleID, tx.UserID, tx.StockAssetID,
 		tx.Symbol, tx.Exchange, tx.Name,
 		string(tx.Type), tx.Quantity, tx.Price, tx.Currency,
 		tx.AvgPriceAtTx, tx.RealizedPnL,
-		tx.Memo, tx.ExecutedAt, tx.CreatedAt, tx.ExchangeRateAtTx,
+		tx.Memo, tx.ExecutedAt, tx.CreatedAt, tx.ExchangeRateAtTx, tx.Source,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("create stock_transaction: %w", err)
+		return fmt.Errorf("create stock_transaction: %w", err)
+	}
+	return nil
+}
+
+func (r *PgStockTransactionRepository) Create(ctx context.Context, tx *models.StockTransaction) (*models.StockTransaction, error) {
+	if err := insertSTx(ctx, r.db, tx); err != nil {
+		return nil, err
 	}
 	return tx, nil
 }

@@ -247,7 +247,7 @@ func (h *Handler) postNetWorthSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	stockKRW, assetKRW, liabilityKRW := market.netWorth()
 
-	snap := newSnapshot(coupleID, stockKRW, assetKRW, liabilityKRW, time.Now())
+	snap := newSnapshot(coupleID, stockKRW, assetKRW, liabilityKRW, time.Now().In(models.KST))
 	saved, err := h.roadmapRepo.UpsertSnapshot(ctx, snap)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
@@ -434,7 +434,7 @@ func dividendPlanFrom(cands []models.DividendCandidate) []models.DividendHolding
 //
 // 그 전 기록에는 앱을 쓰기 전부터 갖고 있던 주식을 등록한 매수가 섞여 있어,
 // 2026년 8월 한 달 적립이 2.5억으로 잡힌다. 실제로 넣은 돈이 아니다.
-var contributionsFrom = time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
+var contributionsFrom = time.Date(2026, time.September, 1, 0, 0, 0, 0, models.KST)
 
 // roadmapProjection — GET /api/roadmap/projection
 //
@@ -504,7 +504,7 @@ func (h *Handler) roadmapProjection(w http.ResponseWriter, r *http.Request) {
 
 	usdKRW := market.usdKRW
 
-	now := time.Now().UTC()
+	now := time.Now().In(models.KST)
 
 	// 이번 달 실적을 남긴다. 조회할 때마다 덮어쓰므로 그 달에 마지막으로 연
 	// 시점의 값이 기록되고, 달이 지나면 그 값으로 굳는다. 기록할 곳이 없으면

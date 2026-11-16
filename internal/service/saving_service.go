@@ -238,6 +238,7 @@ func (s *SavingService) applyStock(ctx context.Context, tx *models.Transaction, 
 		Currency:         currency,
 		AvgPriceAtTx:     avgAfter,
 		ExchangeRateAtTx: fx,
+		Source:           models.StockTxSourceSaving,
 		Memo:             tx.Memo,
 		ExecutedAt:       tx.Date,
 	}

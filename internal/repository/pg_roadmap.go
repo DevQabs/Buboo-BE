@@ -167,19 +167,22 @@ func (r *PgRoadmapRepository) ListSnapshots(ctx context.Context, coupleID string
 //
 // from 이전은 세지 않는다. 앱을 쓰기 전부터 갖고 있던 주식을 등록한 기록이
 // 매수로 남아 있어, 그 달 적립이 실제보다 몇 배로 잡힌다.
+//
+// 저축으로 산 주식(source='saving')은 저축 거래 금액으로 이미 세므로 빼고,
+// 월은 한국 달력으로 자른다.
 func (r *PgRoadmapRepository) MonthlyContributions(ctx context.Context, coupleID string, from time.Time) (map[string]int64, error) {
 	rows, err := r.db.Query(ctx,
 		`SELECT month, SUM(krw)::bigint FROM (
-		   SELECT to_char(executed_at, 'YYYY-MM') AS month,
+		   SELECT to_char(executed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM') AS month,
 		          SUM(CASE WHEN type = 'buy' THEN 1 ELSE -1 END
 		              * quantity * price
 		              * CASE WHEN currency = 'USD' AND exchange_rate_at_tx > 0
 		                     THEN exchange_rate_at_tx ELSE 1 END) AS krw
 		     FROM stock_transactions
-		    WHERE couple_id = $1 AND executed_at >= $2
+		    WHERE couple_id = $1 AND executed_at >= $2 AND source = 'trade'
 		    GROUP BY 1
 		   UNION ALL
-		   SELECT to_char(date, 'YYYY-MM') AS month, SUM(amount) AS krw
+		   SELECT to_char(date AT TIME ZONE 'Asia/Seoul', 'YYYY-MM') AS month, SUM(amount) AS krw
 		     FROM transactions
 		    WHERE couple_id = $1 AND date >= $2 AND category LIKE '저축%'
 		    GROUP BY 1
