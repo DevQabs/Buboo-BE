@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/yourname/couple-app/internal/auth"
 	"github.com/yourname/couple-app/internal/models"
 	"github.com/yourname/couple-app/internal/repository"
@@ -47,6 +48,9 @@ func (h *Handler) authCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user != nil {
+		if h.rejectForeignInvite(w, r, req.InviteCode, user) {
+			return
+		}
 		token, err := auth.IssueToken(h.jwtSecret, user.ID, user.CoupleID, user.Role)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err)
@@ -64,6 +68,9 @@ func (h *Handler) authCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if user != nil {
+			if h.rejectForeignInvite(w, r, req.InviteCode, user) {
+				return
+			}
 			if err := h.userRepo.UpdateUserGoogleSub(ctx, user.ID, req.GoogleSub); err != nil {
 				respondError(w, http.StatusInternalServerError, err)
 				return
@@ -83,7 +90,7 @@ func (h *Handler) authCallback(w http.ResponseWriter, r *http.Request) {
 	if req.InviteCode != "" {
 		created, err := h.inviteRepo.RedeemInvite(ctx, req.InviteCode, models.User{
 			ID:        uuid.New().String(),
-			Name:      req.Nickname, // 비면 초대에 적힌 이름, 그다음 메일 앞부분
+			Name:      models.CapName(req.Nickname), // 비면 초대에 적힌 이름, 그다음 메일 앞부분
 			Email:     req.GoogleEmail,
 			GoogleSub: req.GoogleSub,
 		}, nameFromEmail(req.GoogleEmail))
@@ -112,6 +119,28 @@ func (h *Handler) authCallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{"status": "new_user"})
+}
+
+// rejectForeignInvite 는 초대 코드를 들고 온 기존 계정이 초대한 그룹이 아닌 다른 그룹
+// 사람이면 409 를 쓰고 true 를 돌려준다. 그대로 로그인시키면 초대받은 그룹이 아닌
+// 원래 그룹으로 들어가 버린다. 이미 쓴·만료된 코드면 평소처럼 로그인시킨다.
+func (h *Handler) rejectForeignInvite(w http.ResponseWriter, r *http.Request, code string, user *models.User) bool {
+	if code == "" {
+		return false
+	}
+	inv, err := h.inviteRepo.GetInviteByCode(r.Context(), code)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false
+	}
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return true
+	}
+	if inv.CoupleID != user.CoupleID {
+		respondError(w, http.StatusConflict, errorf("이미 다른 그룹에 가입된 계정입니다"))
+		return true
+	}
+	return false
 }
 
 // ─────────────────────────────────────────────

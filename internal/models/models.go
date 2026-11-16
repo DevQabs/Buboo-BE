@@ -4,7 +4,10 @@
 // to be DB-agnostic for future PostgreSQL migration.
 package models
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // KST 는 한국 표준시. 서머타임이 없어 고정 오프셋이면 충분하고 tzdata 도 필요 없다.
 // 세금 연도·로드맵 월처럼 "한국 달력 기준" 경계를 자를 때 쓴다.
@@ -104,6 +107,15 @@ type User struct {
 	AvatarColor string    `json:"avatar_color"` // hex color for UI
 	IsOwner     bool      `json:"is_owner"`     // 그룹 만든 사람. 권한 행 없이 전체 edit
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+// CapName 은 구성원 이름을 앞뒤 공백 없이 30자 이내로 맞춘다.
+func CapName(s string) string {
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > 30 {
+		return strings.TrimSpace(string(r[:30]))
+	}
+	return s
 }
 
 // Invite is a one-time link that lets a partner join a couple.

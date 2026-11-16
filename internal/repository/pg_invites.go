@@ -95,7 +95,7 @@ func (r *PgInviteRepository) RedeemInvite(ctx context.Context, code string, u mo
 	u.Role = models.RoleForPreset(preset, taken)
 	u.AvatarColor = models.DefaultAvatarColor(u.Role)
 	for _, n := range []string{u.Name, nickname, fallbackName} {
-		if n != "" {
+		if n = models.CapName(n); n != "" {
 			u.Name = n
 			break
 		}

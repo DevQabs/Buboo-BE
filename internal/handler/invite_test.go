@@ -3,10 +3,12 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/yourname/couple-app/internal/models"
 	"github.com/yourname/couple-app/internal/repository"
 )
@@ -17,6 +19,14 @@ type fakeInvites struct {
 	redeemErr        error
 	redeemed         *models.User
 	fallback         string
+	invite           *models.Invite // GetInviteByCode 결과 (nil = 없는 코드)
+}
+
+func (f *fakeInvites) GetInviteByCode(_ context.Context, code string) (*models.Invite, error) {
+	if f.invite == nil || f.invite.Code != code {
+		return nil, fmt.Errorf("scan invite: %w", pgx.ErrNoRows)
+	}
+	return f.invite, nil
 }
 
 func (f *fakeInvites) CreateInvite(_ context.Context, coupleID, _, preset, nickname string) (*models.Invite, error) {
@@ -33,10 +43,25 @@ func (f *fakeInvites) RedeemInvite(_ context.Context, _ string, u models.User, f
 	return &u, nil
 }
 
-func (f *fakeUsers) GetUserByGoogleSub(context.Context, string) (*models.User, error) {
+func (f *fakeUsers) GetUserByGoogleSub(_ context.Context, sub string) (*models.User, error) {
+	for i := range f.users {
+		if f.users[i].GoogleSub == sub {
+			return &f.users[i], nil
+		}
+	}
 	return nil, nil
 }
-func (f *fakeUsers) GetUserByEmail(context.Context, string) (*models.User, error) { return nil, nil }
+
+func (f *fakeUsers) GetUserByEmail(_ context.Context, email string) (*models.User, error) {
+	for i := range f.users {
+		if f.users[i].Email == email {
+			return &f.users[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeUsers) UpdateUserGoogleSub(context.Context, string, string) error { return nil }
 
 func TestCreateInvite(t *testing.T) {
 	cases := []struct {
@@ -88,5 +113,52 @@ func TestAuthCallbackInvite(t *testing.T) {
 	}
 	if got := run(&fakeInvites{redeemErr: errors.New("db down")}); got != http.StatusInternalServerError {
 		t.Errorf("DB 오류는 500: got %d", got)
+	}
+}
+
+func TestAuthCallbackInvite_이미있는계정(t *testing.T) {
+	invite := &models.Invite{Code: "ABCD2345", CoupleID: "c1"}
+	cases := []struct {
+		name string
+		user models.User
+		want int
+	}{
+		{"구글 계정이 다른 그룹", models.User{ID: "u9", CoupleID: "other", GoogleSub: "g1"}, http.StatusConflict},
+		{"메일이 다른 그룹", models.User{ID: "u9", CoupleID: "other", Email: "mom@example.com"}, http.StatusConflict},
+		{"같은 그룹이면 로그인", models.User{ID: "u9", CoupleID: "c1", GoogleSub: "g1"}, http.StatusOK},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newPermHandler(&fakePerms{}, []models.User{c.user})
+			inv := &fakeInvites{invite: invite}
+			h.inviteRepo = inv
+			h.internalSecret = []byte("s3cret")
+			rec := do(h, "", http.MethodPost, "/api/auth/callback",
+				`{"google_sub":"g1","google_email":"mom@example.com","invite_code":"ABCD2345"}`)
+			if rec.Code != c.want {
+				t.Fatalf("got %d, want %d (%s)", rec.Code, c.want, rec.Body)
+			}
+			if c.want == http.StatusConflict && !strings.Contains(rec.Body.String(), "이미 다른 그룹에 가입된 계정입니다") {
+				t.Errorf("안내 문구: %s", rec.Body)
+			}
+			if inv.redeemed != nil {
+				t.Error("이미 있는 계정으로 초대를 썼다")
+			}
+		})
+	}
+}
+
+func TestAuthCallbackInvite_이름은30자로자른다(t *testing.T) {
+	h := newPermHandler(&fakePerms{}, nil)
+	inv := &fakeInvites{}
+	h.inviteRepo = inv
+	h.internalSecret = []byte("s3cret")
+	rec := do(h, "", http.MethodPost, "/api/auth/callback",
+		`{"google_sub":"g1","invite_code":"ABCD2345","nickname":"  `+strings.Repeat("가", 40)+` "}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d (%s)", rec.Code, rec.Body)
+	}
+	if inv.redeemed.Name != strings.Repeat("가", 30) {
+		t.Errorf("이름은 앞뒤 공백을 빼고 30자: %q", inv.redeemed.Name)
 	}
 }
