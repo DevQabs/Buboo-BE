@@ -158,6 +158,14 @@ func (h *Handler) NewRouter() chi.Router {
 		r.Get("/couple", h.getCouple)
 		r.Get("/me/permissions", h.myPermissions)
 
+		// owner 전용 — requireMenu() 에 메뉴가 없으면 owner 만 통과
+		r.Route("/members", func(r chi.Router) {
+			r.Use(requireMenu())
+			r.Get("/", h.listMembers)
+			r.Put("/{id}/permissions", h.putMemberPermissions)
+			r.Delete("/{id}", h.removeMember)
+		})
+
 		// 가계부
 		r.With(requireMenu("ledger")).Put("/couple", h.updateCouple)
 		r.With(requireMenu("ledger")).Get("/categories", h.getCategories)
