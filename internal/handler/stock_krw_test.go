@@ -183,3 +183,35 @@ func TestUpdateStock_AcceptsAPlausibleKRWBasisOnly(t *testing.T) {
 		t.Errorf("원화 평단 수정: want 19600, got %v", got)
 	}
 }
+
+func TestUpdateStock_다른그룹사람에게는_넘길수없다(t *testing.T) {
+	st := &memStocks{rows: map[string]models.StockAsset{"stock-1": {ID: "stock-1", UserID: "u1", Currency: "KRW", Quantity: 1, AveragePrice: 100, AvgKRWPrice: 100}}}
+	// stockCall 은 인증 없이 부르므로 호출자 그룹은 "" 다.
+	users := &fakeUsers{users: []models.User{{ID: "u1", CoupleID: ""}, {ID: "u2", CoupleID: ""}, {ID: "x9", CoupleID: "other"}}}
+	h := &Handler{stockRepo: st, stxRepo: &memSTx{}, userRepo: users}
+
+	if w := stockCall(h.updateStock, "stock-1", `{"user_id":"x9"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("다른 그룹 사용자는 400 이어야 한다: got %d", w.Code)
+	}
+	if got := st.rows["stock-1"].UserID; got != "u1" {
+		t.Errorf("거부했는데 소유자가 바뀌었다: %v", got)
+	}
+	if w := stockCall(h.updateStock, "stock-1", `{"user_id":"u2"}`); w.Code != http.StatusOK {
+		t.Fatalf("같은 그룹 사용자로 바꾸기 실패: %d %s", w.Code, w.Body)
+	}
+	if got := st.rows["stock-1"].UserID; got != "u2" {
+		t.Errorf("소유자: want u2, got %v", got)
+	}
+}
+
+func TestUpdateStock_원화종목평단을고치면_원화평단도같이바뀐다(t *testing.T) {
+	st := &memStocks{rows: map[string]models.StockAsset{"stock-1": {ID: "stock-1", Currency: "KRW", Quantity: 1, AveragePrice: 100, AvgKRWPrice: 100}}}
+	h := &Handler{stockRepo: st, stxRepo: &memSTx{}}
+
+	if w := stockCall(h.updateStock, "stock-1", `{"average_price":70000}`); w.Code != http.StatusOK {
+		t.Fatalf("수정 실패: %d %s", w.Code, w.Body)
+	}
+	if got := st.rows["stock-1"].AvgKRWPrice; got != 70_000 {
+		t.Errorf("원화 종목 원화 평단: want 70000, got %v", got)
+	}
+}

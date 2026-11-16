@@ -761,6 +761,16 @@ func (h *Handler) updateStock(w http.ResponseWriter, r *http.Request) {
 
 	// Partial update — only non-nil fields are applied
 	if req.UserID != nil {
+		// 소유자는 호출자 그룹 사람으로만 바꾼다.
+		users, err := h.userRepo.ListUsers(r.Context(), auth.CoupleIDFromCtx(r.Context()))
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !slices.ContainsFunc(users, func(u models.User) bool { return u.ID == *req.UserID }) {
+			respondError(w, http.StatusBadRequest, fmt.Errorf("user_id 가 이 그룹 사람이 아닙니다"))
+			return
+		}
 		existing.UserID = *req.UserID
 	}
 	if req.Name != nil {
@@ -779,6 +789,9 @@ func (h *Handler) updateStock(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		existing.AveragePrice = *req.AveragePrice
+		if !strings.EqualFold(existing.Currency, "USD") {
+			existing.AvgKRWPrice = existing.AveragePrice // 원화 종목은 평단이 곧 원화 평단
+		}
 	}
 	if req.Sector != nil {
 		existing.Sector = *req.Sector
