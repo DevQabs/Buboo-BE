@@ -10,11 +10,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/yourname/couple-app/internal/models"
 	"github.com/yourname/couple-app/internal/repository"
 )
@@ -291,4 +293,93 @@ func (s *SavingService) applyOtherAsset(ctx context.Context, tx *models.Transact
 	}
 	link.LinkAssetID = created.ID // backfill for tx record
 	return nil
+}
+
+// RevertSaving 은 저축 거래를 지울 때 연결 자산을 저축 전으로 되돌린다.
+// 연결 자산이 이미 지워졌으면 되돌릴 곳이 없으니 넘어간다.
+func (s *SavingService) RevertSaving(ctx context.Context, tx *models.Transaction) error {
+	l := tx.SavingLink
+	if tx.Type != "saving" || l == nil || l.LinkAssetID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if l.Kind != models.SavingKindStock {
+		return s.shiftOtherAsset(ctx, tx.CoupleID, l.LinkAssetID, -tx.Amount)
+	}
+	qty, price := l.AddStockQty, l.AddStockPrice
+	if qty == 0 { // 저축이 새로 만든 종목
+		qty, price = l.NewStockQty, l.NewStockPrice
+	}
+	_, err := s.stockRepo.Trade(ctx, l.LinkAssetID, tx.CoupleID, func(a *models.StockAsset) (*models.StockTransaction, error) {
+		left := a.Quantity - qty
+		if left > 0 {
+			if a.Currency == "USD" {
+				// 저축 매수 때 남긴 환율로 원화 평단을 되돌린다. 기록이 없으면(원화 평단 도입 전 저축) 그대로 둔다.
+				fx, err := s.savingBuyFX(ctx, tx, a, qty, price)
+				if err != nil {
+					return nil, err
+				}
+				if fx > 0 {
+					a.AvgKRWPrice = (a.AvgKRWPrice*a.Quantity - price*qty*fx) / left
+				}
+			}
+			a.AveragePrice = (a.AveragePrice*a.Quantity - price*qty) / left
+			if a.Currency != "USD" {
+				a.AvgKRWPrice = a.AveragePrice
+			}
+		}
+		a.Quantity = left // 0 이하면 Trade 가 종목을 지운다
+		return nil, nil
+	})
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
+// savingBuyFX 는 저축 거래가 USD 종목을 살 때 매매 기록에 남긴 환율이다. 없으면 0.
+// 저축 거래와 매매 기록은 id 로 이어지지 않아 종목·수량·단가·날짜로 찾는다.
+func (s *SavingService) savingBuyFX(ctx context.Context, tx *models.Transaction, a *models.StockAsset, qty, price float64) (float64, error) {
+	rows, err := s.stxRepo.ListBySymbol(ctx, tx.CoupleID, a.Symbol)
+	if err != nil {
+		return 0, err
+	}
+	day := tx.Date.UTC().Format(time.DateOnly)
+	for _, r := range rows {
+		if r.Source == models.StockTxSourceSaving && r.StockAssetID == a.ID && r.Type == models.StockTxBuy &&
+			r.Quantity == qty && r.Price == price && r.ExecutedAt.UTC().Format(time.DateOnly) == day {
+			return r.ExchangeRateAtTx, nil
+		}
+	}
+	return 0, nil
+}
+
+// ResizeSaving 은 저축 금액을 고칠 때 연결된 예금·일반 자산을 차액만큼 옮긴다.
+// 주식 저축은 산 주식 수가 금액과 따로 저장돼 있어 자산을 건드리지 않는다.
+func (s *SavingService) ResizeSaving(ctx context.Context, old *models.Transaction, newAmount int64) error {
+	l := old.SavingLink
+	if l == nil || l.LinkAssetID == "" || l.Kind == models.SavingKindStock || newAmount == old.Amount {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shiftOtherAsset(ctx, old.CoupleID, l.LinkAssetID, newAmount-old.Amount)
+}
+
+func (s *SavingService) shiftOtherAsset(ctx context.Context, coupleID, id string, delta int64) error {
+	a, err := s.assetRepo.GetByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if a.CoupleID != coupleID {
+		return nil
+	}
+	a.ValueKRW += delta
+	_, err = s.assetRepo.Update(ctx, a)
+	return err
 }

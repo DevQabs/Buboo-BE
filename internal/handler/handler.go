@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -386,15 +387,47 @@ func (h *Handler) getTransaction(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, tx)
 }
 
+// mergeTransaction 은 본문에 있는 필드만 기존 거래에 덮어쓴다. 빠진 필드는 그대로다.
+// JSON 왕복으로 복사해, 포인터·슬라이스 필드가 기존 거래와 메모리를 공유하지 않게 한다.
+func mergeTransaction(existing *models.Transaction, body io.Reader) (*models.Transaction, error) {
+	b, err := json.Marshal(existing)
+	if err != nil {
+		return nil, err
+	}
+	var merged models.Transaction
+	if err := json.Unmarshal(b, &merged); err != nil {
+		return nil, err
+	}
+	if err := json.NewDecoder(body).Decode(&merged); err != nil {
+		return nil, err
+	}
+	merged.ID, merged.CoupleID, merged.CreatedAt = existing.ID, existing.CoupleID, existing.CreatedAt
+	return &merged, nil
+}
+
 func (h *Handler) updateTransaction(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	var tx models.Transaction
-	if err := json.NewDecoder(r.Body).Decode(&tx); err != nil {
+	ctx := r.Context()
+	existing, err := h.txRepo.GetByID(ctx, chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusNotFound, err)
+		return
+	}
+	tx, err := mergeTransaction(existing, r.Body)
+	if err != nil {
 		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
 		return
 	}
-	tx.ID = id
-	updated, err := h.txRepo.Update(r.Context(), &tx)
+	if existing.Type == "saving" || tx.Type == "saving" {
+		if tx.Type != existing.Type || !reflect.DeepEqual(tx.SavingLink, existing.SavingLink) {
+			respondError(w, http.StatusBadRequest, fmt.Errorf("저축 연결은 바꿀 수 없습니다. 지우고 다시 추가해 주세요"))
+			return
+		}
+		if err := h.savingSvc.ResizeSaving(ctx, existing, tx.Amount); err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	updated, err := h.txRepo.Update(ctx, tx)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -403,9 +436,20 @@ func (h *Handler) updateTransaction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteTransaction(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id := chi.URLParam(r, "id")
-	if err := h.txRepo.Delete(r.Context(), id); err != nil {
+	tx, err := h.txRepo.GetByID(ctx, id)
+	if err != nil {
 		respondError(w, http.StatusNotFound, err)
+		return
+	}
+	// 거래를 먼저 지운다. 원복이 실패해도 다시 눌러 두 번 원복되는 일이 없다.
+	if err := h.txRepo.Delete(ctx, id); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := h.savingSvc.RevertSaving(ctx, tx); err != nil {
+		respondError(w, http.StatusInternalServerError, fmt.Errorf("거래는 지웠지만 연결 자산을 되돌리지 못했습니다: %w", err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
