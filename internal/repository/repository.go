@@ -174,6 +174,39 @@ type PermissionRepository interface {
 	RemoveMember(ctx context.Context, userID string) error
 }
 
+// StorageRepository records every uploaded object so the app can keep the
+// whole bucket under STORAGE_LIMIT_BYTES (R2 has no cap of its own).
+type StorageRepository interface {
+	// Record inserts a row; an existing key is left as is.
+	Record(ctx context.Context, o models.StorageObject) error
+	// Get returns nil, nil when the key was never issued.
+	Get(ctx context.Context, key string) (*models.StorageObject, error)
+	Delete(ctx context.Context, keys []string) error
+	// TotalBytes sums the whole bucket (all couples — the free 10GB is per account).
+	TotalBytes(ctx context.Context) (int64, error)
+}
+
+// BabyRepository stores the couple's one baby, photo moments and growth records.
+type BabyRepository interface {
+	Get(ctx context.Context, coupleID string) (*models.Baby, error) // nil, nil when not registered
+	Put(ctx context.Context, coupleID string, b models.Baby) error
+
+	ListMoments(ctx context.Context, coupleID string) ([]models.BabyMoment, error)
+	GetMoment(ctx context.Context, id string) (*models.BabyMoment, error)
+	// CreateMoment inserts m and m.Media in one transaction and fills their IDs.
+	CreateMoment(ctx context.Context, coupleID string, m *models.BabyMoment) error
+	// UpdateMoment updates date/content and appends add after the existing media.
+	UpdateMoment(ctx context.Context, coupleID string, m *models.BabyMoment, add []models.BabyMedia) error
+	DeleteMoment(ctx context.Context, id string) error // media rows go by ON DELETE CASCADE
+	GetMedia(ctx context.Context, id string) (*models.BabyMedia, error)
+	DeleteMedia(ctx context.Context, id string) error
+
+	ListGrowth(ctx context.Context, coupleID string) ([]models.BabyGrowth, error)
+	CreateGrowth(ctx context.Context, coupleID string, g *models.BabyGrowth) error
+	UpdateGrowth(ctx context.Context, g *models.BabyGrowth) error
+	DeleteGrowth(ctx context.Context, id string) error
+}
+
 // ─────────────────────────────────────────────
 //  Filter helpers (used by service / handler layers)
 // ─────────────────────────────────────────────
