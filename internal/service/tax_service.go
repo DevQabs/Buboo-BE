@@ -5,7 +5,12 @@
 // 매긴다. 공제는 부부 합산이 아니라 각자 250만원씩이다.
 package service
 
-import "fmt"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+)
 
 const (
 	// BasicDeduction은 양도소득 기본공제로, 인별 연 250만원이다.
@@ -107,19 +112,62 @@ func LiquidationTax(realizedPnL, unrealizedPnL float64) float64 {
 
 // BlendKRWCostBasis는 추가 매수 후의 원화 평단을 낸다.
 //
-// 기존 평단이 손상됐으면 섞지 않고 미상(0)으로 남긴다. 0을 그대로 가중평균에
-// 넣으면 평단이 매수분만큼으로 희석된다 — NU는 평단 0인 203주에 108주를
-// 더해 19,768원이 6,865원이 됐고, 그 뒤 매도에서 7만원 손실이 395만원
-// 이익으로 기록됐다. 미상으로 두면 ValidateKRWCostBasis가 매도를 막는다.
+// 기존 평단이 손상됐으면(ValidateKRWCostBasis 실패) 0을 그대로 섞지 않는다.
+// 0을 섞으면 평단이 희석된다 — NU는 평단 0인 203주에 108주를 더해 19,768원이
+// 6,865원이 됐고, 매도에서 7만원 손실이 395만원 이익으로 기록됐다.
+// 그렇다고 0을 반환하면 이후 매수를 몇 번 해도 영구히 0이라 매도가 막힌다.
+// 그래서 기존 수량을 이번 매수 환율로 재계산한다. 기존분의 환차손익은 잃지만
+// (근사), 평단은 정상 범위로 돌아온다. 달러 평단도 없으면 근거가 없어 0이다.
 func BlendKRWCostBasis(oldQty, oldAvgUSD, oldAvgKRW, buyQty, buyPrice, buyFX float64) float64 {
 	newQty := oldQty + buyQty
 	if newQty <= 0 {
 		return 0
 	}
-	if oldQty > 0 {
-		if err := ValidateKRWCostBasis(oldAvgUSD, oldAvgKRW); err != nil {
+	if oldQty > 0 && ValidateKRWCostBasis(oldAvgUSD, oldAvgKRW) != nil {
+		if oldAvgUSD <= 0 {
 			return 0
 		}
+		oldAvgKRW = oldAvgUSD * buyFX
 	}
 	return (oldQty*oldAvgKRW + buyQty*buyPrice*buyFX) / newQty
+}
+
+// KRWAvgAfterBuy는 매수 후 원화 평단이다. KRW 종목은 환산이 없으니
+// 달러(원래 통화) 평단과 같다. fx 는 ResolveBuyFX 의 결과다.
+func KRWAvgAfterBuy(currency string, oldQty, oldAvg, oldAvgKRW, buyQty, buyPrice, fx float64) float64 {
+	if !strings.EqualFold(currency, "USD") {
+		newQty := oldQty + buyQty
+		if newQty <= 0 {
+			return 0
+		}
+		return (oldQty*oldAvg + buyQty*buyPrice) / newQty
+	}
+	return BlendKRWCostBasis(oldQty, oldAvg, oldAvgKRW, buyQty, buyPrice, fx)
+}
+
+// ErrBuyFX는 USD 매수 환율을 정하지 못했다는 뜻이다. 핸들러는 400으로 돌려준다.
+var ErrBuyFX = errors.New("매수 환율을 정하지 못했습니다")
+
+// ResolveBuyFX는 매수에 쓸 USD/KRW 환율을 정한다.
+//
+// KRW 종목은 환산이 없으니 0이다. USD는 요청 환율이 있으면 그것을, 없으면
+// fetch(현재 환율)를 쓴다. 범위 밖 환율은 받지 않는다 — 화면이 환율을 모를 때
+// 1을 보내면 원화 평단이 1,400분의 1로 저장된다(MCD 277원 사례).
+// 조회 실패 시 대체 환율(FallbackUSDKRW)을 쓰지 않는다. 취득가는 세금 근거다.
+func ResolveBuyFX(ctx context.Context, currency string, reqFX float64, fetch func(context.Context) (float64, error)) (float64, error) {
+	if !strings.EqualFold(currency, "USD") {
+		return 0, nil
+	}
+	fx := reqFX
+	if fx <= 0 {
+		got, err := fetch(ctx)
+		if err != nil {
+			return 0, fmt.Errorf("%w: 현재 환율 조회에 실패했습니다(%v). 환율을 직접 입력해 주세요", ErrBuyFX, err)
+		}
+		fx = got
+	}
+	if fx < minPlausibleUSDKRW || fx > maxPlausibleUSDKRW {
+		return 0, fmt.Errorf("%w: 환율 %.2f 이(가) 허용 범위(%d~%d) 밖입니다", ErrBuyFX, fx, minPlausibleUSDKRW, maxPlausibleUSDKRW)
+	}
+	return fx, nil
 }

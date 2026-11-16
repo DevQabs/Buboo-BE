@@ -1,6 +1,11 @@
 package service
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"math"
+	"testing"
+)
 
 func TestCapitalGainsTax_GainWithinBasicDeductionIsNotTaxed(t *testing.T) {
 	got := CalcCapitalGainsTax([]UserGain{
@@ -178,13 +183,33 @@ func TestLiquidationTax_NetsAgainstARealizedLoss(t *testing.T) {
 	}
 }
 
-func TestBlendKRWCostBasis_DoesNotDiluteAgainstAMissingBasis(t *testing.T) {
+func TestBlendKRWCostBasis_RebasesAMissingBasisAtTheBuyRate(t *testing.T) {
 	// NU: 평단 0인 203주에 108주를 $13.94 / 환율 1,418.12 로 더한 실제 건.
-	// 섞으면 평단이 19,768원에서 6,865원으로 주저앉아 매도 손익이 뒤집힌다.
+	// 0을 섞으면 6,865원으로 희석되고, 0을 반환하면 영구히 0이 된다.
+	// 기존 수량도 이번 환율로 재계산해 (203×13.9465 + 108×13.94)/311 × 1418.12.
 	got := BlendKRWCostBasis(203, 13.9465, 0, 108, 13.94, 1418.12)
 
-	if got != 0 {
-		t.Errorf("손상된 평단을 섞었다: got %v (미상 0 이어야 한다)", got)
+	if math.Abs(got-19_774.61) > 0.01 {
+		t.Errorf("기존 수량을 매수 환율로 재계산해야 한다: got %v, want 19774.61", got)
+	}
+	if err := ValidateKRWCostBasis((203*13.9465+108*13.94)/311, got); err != nil {
+		t.Errorf("매수 후 원화 평단이 여전히 비정상이다: %v", err)
+	}
+}
+
+func TestBlendKRWCostBasis_RebasesACorruptBasisAtTheBuyRate(t *testing.T) {
+	// UNH: 역산 환율 9.4(3,135원)로 손상된 329주에 같은 값으로 1주를 더한다.
+	got := BlendKRWCostBasis(329, 334.41, 3_135.41, 1, 334.41, 1400)
+
+	if !almostEqual(got, 334.41*1400) {
+		t.Errorf("손상된 평단을 섞었다: got %v, want %v", got, 334.41*1400)
+	}
+}
+
+func TestBlendKRWCostBasis_CannotRebaseWithoutAUSDBasis(t *testing.T) {
+	// 달러 평단도 없으면 재계산할 근거가 없다. 0(미상)으로 남겨 매도를 막는다.
+	if got := BlendKRWCostBasis(10, 0, 0, 5, 14, 1400); got != 0 {
+		t.Errorf("근거 없이 평단을 만들었다: got %v", got)
 	}
 }
 
@@ -203,5 +228,61 @@ func TestBlendKRWCostBasis_TakesTheBuyLegForANewPosition(t *testing.T) {
 
 	if want := 19_600.0; got != want {
 		t.Errorf("want %v, got %v", want, got)
+	}
+}
+
+func fixedFX(rate float64, err error) func(context.Context) (float64, error) {
+	return func(context.Context) (float64, error) { return rate, err }
+}
+
+func TestResolveBuyFX_KRWNeedsNoRate(t *testing.T) {
+	// KRW 종목은 환율을 조회하지 않는다. 조회되면 오류가 나도록 해 둔다.
+	fx, err := ResolveBuyFX(context.Background(), "KRW", 0, fixedFX(0, errors.New("호출되면 안 된다")))
+	if err != nil || fx != 0 {
+		t.Errorf("KRW 는 (0, nil) 이어야 한다: got (%v, %v)", fx, err)
+	}
+}
+
+func TestResolveBuyFX_PrefersTheRequestRate(t *testing.T) {
+	fx, err := ResolveBuyFX(context.Background(), "USD", 1412.5, fixedFX(1300, nil))
+	if err != nil || fx != 1412.5 {
+		t.Errorf("요청 환율을 써야 한다: got (%v, %v)", fx, err)
+	}
+}
+
+func TestResolveBuyFX_FallsBackToTheCurrentRate(t *testing.T) {
+	fx, err := ResolveBuyFX(context.Background(), "usd", 0, fixedFX(1385.5, nil))
+	if err != nil || fx != 1385.5 {
+		t.Errorf("요청 환율이 없으면 현재 환율을 써야 한다: got (%v, %v)", fx, err)
+	}
+}
+
+func TestResolveBuyFX_FailsWhenNoRateIsAvailable(t *testing.T) {
+	_, err := ResolveBuyFX(context.Background(), "USD", 0, fixedFX(0, errors.New("timeout")))
+	if !errors.Is(err, ErrBuyFX) {
+		t.Errorf("환율 조회 실패는 ErrBuyFX 여야 한다: got %v", err)
+	}
+}
+
+func TestResolveBuyFX_RejectsAnImplausibleRate(t *testing.T) {
+	// 화면이 환율을 모를 때 1을 보내던 버그(BuySellModal)를 막는다.
+	if _, err := ResolveBuyFX(context.Background(), "USD", 1, fixedFX(1400, nil)); !errors.Is(err, ErrBuyFX) {
+		t.Errorf("환율 1 은 거부해야 한다: got %v", err)
+	}
+	if _, err := ResolveBuyFX(context.Background(), "USD", 0, fixedFX(0, nil)); !errors.Is(err, ErrBuyFX) {
+		t.Errorf("조회 결과 0 은 거부해야 한다: got %v", err)
+	}
+}
+
+func TestKRWAvgAfterBuy_KRWStockIsItsOwnAverage(t *testing.T) {
+	// 100주 @ 70,000원 + 100주 @ 80,000원 → 75,000원. 환율 0 이어도 된다.
+	if got := KRWAvgAfterBuy("KRW", 100, 70_000, 0, 100, 80_000, 0); got != 75_000 {
+		t.Errorf("want 75000, got %v", got)
+	}
+}
+
+func TestKRWAvgAfterBuy_USDNewPositionIsPriceTimesRate(t *testing.T) {
+	if got := KRWAvgAfterBuy("USD", 0, 0, 0, 10, 14, 1400); got != 19_600 {
+		t.Errorf("want 19600, got %v", got)
 	}
 }
