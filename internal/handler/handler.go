@@ -24,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/yourname/couple-app/internal/auth"
 	"github.com/yourname/couple-app/internal/models"
 	"github.com/yourname/couple-app/internal/repository"
@@ -1837,7 +1838,13 @@ func (h *Handler) deleteDividend(w http.ResponseWriter, r *http.Request) {
 	// 연결된 가계부 수입을 먼저 지운다. 실패하면 배당이 남아 재시도할 수 있고,
 	// 사용자가 이미 지웠으면 할 일이 없다.
 	if d.TransactionID != "" {
-		if _, err := h.txRepo.GetByID(ctx, d.TransactionID); err == nil {
+		_, err := h.txRepo.GetByID(ctx, d.TransactionID)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows): // 이미 지워짐
+		case err != nil:
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		default:
 			if err := h.txRepo.Delete(ctx, d.TransactionID); err != nil {
 				respondError(w, http.StatusInternalServerError, err)
 				return

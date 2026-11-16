@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/yourname/couple-app/internal/models"
 	"github.com/yourname/couple-app/internal/repository"
 )
@@ -14,14 +16,18 @@ type fakeTxRepo struct {
 	repository.TransactionRepository
 	txs        map[string]*models.Transaction
 	delErr     error
+	getErr     error // GetByID 가 not-found 아닌 실패를 낼 때
 	start, end time.Time
 }
 
 func (f *fakeTxRepo) GetByID(_ context.Context, id string) (*models.Transaction, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	if tx, ok := f.txs[id]; ok {
 		return tx, nil
 	}
-	return nil, fmt.Errorf("transaction %s not found", id)
+	return nil, fmt.Errorf("transaction %s not found: %w", id, pgx.ErrNoRows) // PG 구현과 같은 모양
 }
 
 func (f *fakeTxRepo) Delete(_ context.Context, id string) error {
