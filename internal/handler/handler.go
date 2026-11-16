@@ -2419,15 +2419,16 @@ func (h *Handler) createSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s := &models.Schedule{
-		CoupleID:    auth.CoupleIDFromCtx(r.Context()),
-		UserID:      req.UserID,
-		Title:       req.Title,
-		Description: req.Description,
-		StartDate:   startDate,
-		AllDay:      req.AllDay,
-		IsDDay:      req.IsDDay,
-		DDayLabel:   req.DDayLabel,
-		Color:       req.Color,
+		CoupleID:      auth.CoupleIDFromCtx(r.Context()),
+		UserID:        req.UserID,
+		Title:         req.Title,
+		Description:   req.Description,
+		StartDate:     startDate,
+		AllDay:        req.AllDay,
+		IsDDay:        req.IsDDay,
+		IsAnniversary: req.IsAnniversary,
+		DDayLabel:     req.DDayLabel,
+		Color:         req.Color,
 	}
 	if req.EndDate != nil {
 		endDate, err := time.Parse("2006-01-02", *req.EndDate)
@@ -2471,6 +2472,9 @@ func (h *Handler) updateSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.IsDDay != nil {
 		existing.IsDDay = *req.IsDDay
+	}
+	if req.IsAnniversary != nil {
+		existing.IsAnniversary = *req.IsAnniversary
 	}
 	if req.DDayLabel != nil {
 		existing.DDayLabel = *req.DDayLabel

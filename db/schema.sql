@@ -244,6 +244,7 @@ CREATE TABLE IF NOT EXISTS schedules (
     end_date TIMESTAMPTZ,
     all_day BOOLEAN NOT NULL DEFAULT TRUE,
     is_dday BOOLEAN NOT NULL DEFAULT FALSE,
+    is_anniversary BOOLEAN NOT NULL DEFAULT FALSE,
     dday_label TEXT NOT NULL DEFAULT '',
     color TEXT NOT NULL DEFAULT 'indigo',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

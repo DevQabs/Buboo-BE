@@ -18,19 +18,20 @@ var KST = time.FixedZone("KST", 9*60*60)
 // ─────────────────────────────────────────────
 
 type Schedule struct {
-	ID          string     `json:"id"`
-	CoupleID    string     `json:"couple_id"`
-	UserID      string     `json:"user_id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	StartDate   time.Time  `json:"start_date"`
-	EndDate     *time.Time `json:"end_date,omitempty"`
-	AllDay      bool       `json:"all_day"`
-	IsDDay      bool       `json:"is_dday"`
-	DDayLabel   string     `json:"dday_label"`
-	Color       string     `json:"color"` // "indigo"|"rose"|"emerald"|"amber"|"sky"
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID            string     `json:"id"`
+	CoupleID      string     `json:"couple_id"`
+	UserID        string     `json:"user_id"`
+	Title         string     `json:"title"`
+	Description   string     `json:"description"`
+	StartDate     time.Time  `json:"start_date"`
+	EndDate       *time.Time `json:"end_date,omitempty"`
+	AllDay        bool       `json:"all_day"`
+	IsDDay        bool       `json:"is_dday"`
+	IsAnniversary bool       `json:"is_anniversary"` // 지나도 D+N 으로 센다
+	DDayLabel     string     `json:"dday_label"`
+	Color         string     `json:"color"` // "indigo"|"rose"|"emerald"|"amber"|"sky"
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 type SchedulesFile struct {
@@ -38,26 +39,28 @@ type SchedulesFile struct {
 }
 
 type CreateScheduleRequest struct {
-	UserID      string  `json:"user_id"`
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	StartDate   string  `json:"start_date"` // YYYY-MM-DD
-	EndDate     *string `json:"end_date,omitempty"`
-	AllDay      bool    `json:"all_day"`
-	IsDDay      bool    `json:"is_dday"`
-	DDayLabel   string  `json:"dday_label"`
-	Color       string  `json:"color"`
+	UserID        string  `json:"user_id"`
+	Title         string  `json:"title"`
+	Description   string  `json:"description"`
+	StartDate     string  `json:"start_date"` // YYYY-MM-DD
+	EndDate       *string `json:"end_date,omitempty"`
+	AllDay        bool    `json:"all_day"`
+	IsDDay        bool    `json:"is_dday"`
+	IsAnniversary bool    `json:"is_anniversary"`
+	DDayLabel     string  `json:"dday_label"`
+	Color         string  `json:"color"`
 }
 
 type UpdateScheduleRequest struct {
-	Title       *string `json:"title,omitempty"`
-	Description *string `json:"description,omitempty"`
-	StartDate   *string `json:"start_date,omitempty"`
-	EndDate     *string `json:"end_date,omitempty"`
-	AllDay      *bool   `json:"all_day,omitempty"`
-	IsDDay      *bool   `json:"is_dday,omitempty"`
-	DDayLabel   *string `json:"dday_label,omitempty"`
-	Color       *string `json:"color,omitempty"`
+	Title         *string `json:"title,omitempty"`
+	Description   *string `json:"description,omitempty"`
+	StartDate     *string `json:"start_date,omitempty"`
+	EndDate       *string `json:"end_date,omitempty"`
+	AllDay        *bool   `json:"all_day,omitempty"`
+	IsDDay        *bool   `json:"is_dday,omitempty"`
+	IsAnniversary *bool   `json:"is_anniversary,omitempty"`
+	DDayLabel     *string `json:"dday_label,omitempty"`
+	Color         *string `json:"color,omitempty"`
 }
 
 // ─────────────────────────────────────────────

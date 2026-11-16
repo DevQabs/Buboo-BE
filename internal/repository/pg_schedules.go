@@ -20,7 +20,7 @@ func NewPgScheduleRepository(db *pgxpool.Pool) *PgScheduleRepository {
 }
 
 const schCols = `id, couple_id, user_id, title, description,
-	start_date, end_date, all_day, is_dday, dday_label, color,
+	start_date, end_date, all_day, is_dday, is_anniversary, dday_label, color,
 	created_at, updated_at`
 
 func scanSchedule(row interface{ Scan(dest ...any) error }) (*models.Schedule, error) {
@@ -29,7 +29,7 @@ func scanSchedule(row interface{ Scan(dest ...any) error }) (*models.Schedule, e
 
 	if err := row.Scan(
 		&s.ID, &s.CoupleID, &s.UserID, &s.Title, &s.Description,
-		&s.StartDate, &endDate, &s.AllDay, &s.IsDDay, &s.DDayLabel, &s.Color,
+		&s.StartDate, &endDate, &s.AllDay, &s.IsDDay, &s.IsAnniversary, &s.DDayLabel, &s.Color,
 		&s.CreatedAt, &s.UpdatedAt,
 	); err != nil {
 		return nil, err
@@ -84,10 +84,10 @@ func (r *PgScheduleRepository) Create(ctx context.Context, s *models.Schedule) (
 	_, err := r.db.Exec(ctx,
 		`INSERT INTO schedules
 		 (id, couple_id, user_id, title, description, start_date, end_date,
-		  all_day, is_dday, dday_label, color, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		  all_day, is_dday, is_anniversary, dday_label, color, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		s.ID, s.CoupleID, s.UserID, s.Title, s.Description,
-		s.StartDate, s.EndDate, s.AllDay, s.IsDDay, s.DDayLabel, s.Color,
+		s.StartDate, s.EndDate, s.AllDay, s.IsDDay, s.IsAnniversary, s.DDayLabel, s.Color,
 		s.CreatedAt, s.UpdatedAt,
 	)
 	if err != nil {
@@ -101,10 +101,10 @@ func (r *PgScheduleRepository) Update(ctx context.Context, s *models.Schedule) (
 	tag, err := r.db.Exec(ctx,
 		`UPDATE schedules SET
 		 title=$2, description=$3, start_date=$4, end_date=$5,
-		 all_day=$6, is_dday=$7, dday_label=$8, color=$9, updated_at=$10
+		 all_day=$6, is_dday=$7, dday_label=$8, color=$9, updated_at=$10, is_anniversary=$11
 		 WHERE id=$1`,
 		s.ID, s.Title, s.Description, s.StartDate, s.EndDate,
-		s.AllDay, s.IsDDay, s.DDayLabel, s.Color, s.UpdatedAt,
+		s.AllDay, s.IsDDay, s.DDayLabel, s.Color, s.UpdatedAt, s.IsAnniversary,
 	)
 	if err != nil {
 		return nil, err
