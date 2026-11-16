@@ -136,110 +136,103 @@ func (s *SavingService) ApplySaving(ctx context.Context, req ApplySavingRequest)
 }
 
 func (s *SavingService) applyStock(ctx context.Context, tx *models.Transaction, link *models.SavingLink) error {
-	var (
-		symbol   string
-		exchange string
-		name     string
-		currency string
-		qty      float64
-		price    float64
-		avgAfter float64
-		assetID  string
-		fx       float64
-	)
-
 	if link.LinkAssetID != "" {
 		// ── Add to existing stock ────────────────────────────────────────────────
-		asset, err := s.stockRepo.GetByID(ctx, link.LinkAssetID)
-		if err != nil {
-			return fmt.Errorf("stock %s not found: %w", link.LinkAssetID, err)
-		}
-		if asset.CoupleID != tx.CoupleID {
-			return fmt.Errorf("stock %s not found", link.LinkAssetID)
-		}
+		// 직접 매수(buyStock)와 같은 길: 환율(네트워크)은 잠금 전에 정하고, 잔고 갱신과
+		// 매수 기록은 Trade 한 트랜잭션에서 한다. 기록이 실패하면 저축도 실패한다.
 		if link.AddStockQty <= 0 || link.AddStockPrice <= 0 {
 			return fmt.Errorf("add_stock_qty and add_stock_price must be > 0")
 		}
-
-		qty = link.AddStockQty
-		price = link.AddStockPrice
-
-		fx, err = ResolveBuyFX(ctx, asset.Currency, 0, s.usdKRW)
+		pre, err := s.stockRepo.GetByID(ctx, link.LinkAssetID)
+		if err != nil {
+			return fmt.Errorf("stock %s not found: %w", link.LinkAssetID, err)
+		}
+		if pre.CoupleID != tx.CoupleID {
+			return fmt.Errorf("stock %s not found", link.LinkAssetID)
+		}
+		fx, err := ResolveBuyFX(ctx, pre.Currency, 0, s.usdKRW)
 		if err != nil {
 			return err
 		}
-		asset.AvgKRWPrice = KRWAvgAfterBuy(asset.Currency,
-			asset.Quantity, asset.AveragePrice, asset.AvgKRWPrice, qty, price, fx)
-
-		// Weighted-average cost basis
-		totalCost := asset.AveragePrice*asset.Quantity + price*qty
-		newQty := asset.Quantity + qty
-		asset.AveragePrice = totalCost / newQty
-		asset.Quantity = newQty
-		avgAfter = asset.AveragePrice
-
-		if _, err := s.stockRepo.Update(ctx, asset); err != nil {
+		qty, price := link.AddStockQty, link.AddStockPrice
+		_, err = s.stockRepo.Trade(ctx, link.LinkAssetID, tx.CoupleID, func(asset *models.StockAsset) (*models.StockTransaction, error) {
+			asset.AvgKRWPrice = KRWAvgAfterBuy(asset.Currency,
+				asset.Quantity, asset.AveragePrice, asset.AvgKRWPrice, qty, price, fx)
+			newQty := asset.Quantity + qty
+			asset.AveragePrice = (asset.AveragePrice*asset.Quantity + price*qty) / newQty
+			asset.Quantity = newQty
+			return &models.StockTransaction{
+				CoupleID:         tx.CoupleID,
+				UserID:           tx.UserID,
+				StockAssetID:     asset.ID,
+				Symbol:           asset.Symbol,
+				Exchange:         asset.Exchange,
+				Name:             asset.Name,
+				Type:             models.StockTxBuy,
+				Quantity:         qty,
+				Price:            price,
+				Currency:         asset.Currency,
+				AvgPriceAtTx:     asset.AveragePrice,
+				ExchangeRateAtTx: fx,
+				Source:           models.StockTxSourceSaving,
+				Memo:             tx.Memo,
+				ExecutedAt:       tx.Date,
+			}, nil
+		})
+		if err != nil {
 			return fmt.Errorf("stock update: %w", err)
 		}
-
-		symbol, exchange, name, currency, assetID = asset.Symbol, asset.Exchange, asset.Name, asset.Currency, asset.ID
-	} else {
-		// ── Create new stock asset ───────────────────────────────────────────────
-		if link.NewStockSymbol == "" || link.NewStockExchange == "" || link.NewStockName == "" {
-			return fmt.Errorf("new_stock_symbol, new_stock_exchange, new_stock_name required for new stock")
-		}
-		if link.NewStockQty <= 0 || link.NewStockPrice <= 0 {
-			return fmt.Errorf("new_stock_qty and new_stock_price must be > 0")
-		}
-
-		cur := strings.ToUpper(strings.TrimSpace(link.NewStockCurrency))
-		if cur == "" {
-			cur = "USD"
-		}
-		var err error
-		fx, err = ResolveBuyFX(ctx, cur, 0, s.usdKRW)
-		if err != nil {
-			return err
-		}
-		newAsset := &models.StockAsset{
-			CoupleID:     tx.CoupleID,
-			UserID:       tx.UserID,
-			Symbol:       strings.ToUpper(strings.TrimSpace(link.NewStockSymbol)),
-			Exchange:     strings.ToUpper(strings.TrimSpace(link.NewStockExchange)),
-			Name:         link.NewStockName,
-			Quantity:     link.NewStockQty,
-			AveragePrice: link.NewStockPrice,
-			AvgKRWPrice:  KRWAvgAfterBuy(cur, 0, 0, 0, link.NewStockQty, link.NewStockPrice, fx),
-			Currency:     cur,
-			Sector:       link.NewStockSector,
-			PurchasedAt:  tx.Date,
-		}
-		created, err := s.stockRepo.Create(ctx, newAsset)
-		if err != nil {
-			return fmt.Errorf("stock create: %w", err)
-		}
-
-		qty = link.NewStockQty
-		price = link.NewStockPrice
-		avgAfter = link.NewStockPrice
-		symbol, exchange, name, currency = created.Symbol, created.Exchange, created.Name, created.Currency
-		assetID = created.ID
-		link.LinkAssetID = assetID // backfill for tx record
+		return nil
 	}
+	// ── Create new stock asset ───────────────────────────────────────────────
+	if link.NewStockSymbol == "" || link.NewStockExchange == "" || link.NewStockName == "" {
+		return fmt.Errorf("new_stock_symbol, new_stock_exchange, new_stock_name required for new stock")
+	}
+	if link.NewStockQty <= 0 || link.NewStockPrice <= 0 {
+		return fmt.Errorf("new_stock_qty and new_stock_price must be > 0")
+	}
+
+	cur := strings.ToUpper(strings.TrimSpace(link.NewStockCurrency))
+	if cur == "" {
+		cur = "USD"
+	}
+	fx, err := ResolveBuyFX(ctx, cur, 0, s.usdKRW)
+	if err != nil {
+		return err
+	}
+	newAsset := &models.StockAsset{
+		CoupleID:     tx.CoupleID,
+		UserID:       tx.UserID,
+		Symbol:       strings.ToUpper(strings.TrimSpace(link.NewStockSymbol)),
+		Exchange:     strings.ToUpper(strings.TrimSpace(link.NewStockExchange)),
+		Name:         link.NewStockName,
+		Quantity:     link.NewStockQty,
+		AveragePrice: link.NewStockPrice,
+		AvgKRWPrice:  KRWAvgAfterBuy(cur, 0, 0, 0, link.NewStockQty, link.NewStockPrice, fx),
+		Currency:     cur,
+		Sector:       link.NewStockSector,
+		PurchasedAt:  tx.Date,
+	}
+	created, err := s.stockRepo.Create(ctx, newAsset)
+	if err != nil {
+		return fmt.Errorf("stock create: %w", err)
+	}
+
+	link.LinkAssetID = created.ID // backfill for tx record
 
 	// Step 3: append immutable stock transaction log (non-fatal)
 	stx := &models.StockTransaction{
 		CoupleID:         tx.CoupleID,
 		UserID:           tx.UserID,
-		StockAssetID:     assetID,
-		Symbol:           symbol,
-		Exchange:         exchange,
-		Name:             name,
+		StockAssetID:     created.ID,
+		Symbol:           created.Symbol,
+		Exchange:         created.Exchange,
+		Name:             created.Name,
 		Type:             models.StockTxBuy,
-		Quantity:         qty,
-		Price:            price,
-		Currency:         currency,
-		AvgPriceAtTx:     avgAfter,
+		Quantity:         link.NewStockQty,
+		Price:            link.NewStockPrice,
+		Currency:         created.Currency,
+		AvgPriceAtTx:     link.NewStockPrice,
 		ExchangeRateAtTx: fx,
 		Source:           models.StockTxSourceSaving,
 		Memo:             tx.Memo,

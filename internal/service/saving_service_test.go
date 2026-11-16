@@ -18,6 +18,20 @@ type savingStocks struct {
 	byID    map[string]models.StockAsset
 	created *models.StockAsset
 	updated *models.StockAsset
+	traded  *models.StockTransaction // Trade 가 같은 트랜잭션에 넣은 매수 기록
+}
+
+func (f *savingStocks) Trade(_ context.Context, id, coupleID string, apply func(*models.StockAsset) (*models.StockTransaction, error)) (*models.StockAsset, error) {
+	a, ok := f.byID[id]
+	if !ok || a.CoupleID != coupleID {
+		return nil, repository.ErrNotFound
+	}
+	log, err := apply(&a)
+	if err != nil {
+		return nil, err
+	}
+	f.updated, f.traded = &a, log
+	return &a, nil
 }
 
 func (f *savingStocks) GetByID(_ context.Context, id string) (*models.StockAsset, error) {
@@ -74,8 +88,7 @@ func TestApplyStock_AddToExistingRecoversAZeroBasis(t *testing.T) {
 	st := &savingStocks{byID: map[string]models.StockAsset{
 		"stock-1": {ID: "stock-1", CoupleID: "c1", Currency: "USD", Quantity: 203, AveragePrice: 13.9465, AvgKRWPrice: 0},
 	}}
-	sx := &savingSTx{}
-	s := &SavingService{stockRepo: st, stxRepo: sx, usdKRW: fixedFX(1418.12, nil)}
+	s := &SavingService{stockRepo: st, stxRepo: &savingSTx{}, usdKRW: fixedFX(1418.12, nil)}
 	link := &models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "stock-1", AddStockQty: 108, AddStockPrice: 13.94}
 
 	if err := s.applyStock(context.Background(), savingTx(), link); err != nil {
@@ -84,8 +97,8 @@ func TestApplyStock_AddToExistingRecoversAZeroBasis(t *testing.T) {
 	if math.Abs(st.updated.AvgKRWPrice-19_774.61) > 0.01 {
 		t.Errorf("추가매수 원화 평단: want 19774.61, got %v", st.updated.AvgKRWPrice)
 	}
-	if sx.logged[0].ExchangeRateAtTx != 1418.12 {
-		t.Errorf("매매 로그 환율: want 1418.12, got %v", sx.logged[0].ExchangeRateAtTx)
+	if st.traded.ExchangeRateAtTx != 1418.12 || st.traded.Source != models.StockTxSourceSaving {
+		t.Errorf("매매 로그: want (1418.12, saving), got (%v, %v)", st.traded.ExchangeRateAtTx, st.traded.Source)
 	}
 }
 
