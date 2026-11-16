@@ -8,10 +8,14 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/yourname/couple-app/internal/models"
 )
+
+// ErrDuplicate 는 유니크 제약에 걸린 저장이다. 고정비를 같은 날 두 번 반영하면 난다.
+var ErrDuplicate = errors.New("duplicate")
 
 // ─────────────────────────────────────────────
 //  Transaction Repository

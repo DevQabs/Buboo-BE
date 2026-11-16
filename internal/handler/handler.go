@@ -489,11 +489,7 @@ func (h *Handler) calendarSummary(w http.ResponseWriter, r *http.Request) {
 		if !fe.IsActive {
 			continue
 		}
-		// Clamp day to 28 for months with fewer days.
-		day := fe.DayOfMonth
-		if day > 28 {
-			day = 28
-		}
+		day := clampDay(year, month, fe.DayOfMonth)
 		dateKey := fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 		events = append(events, models.CalendarEvent{
 			Date:   dateKey,
@@ -1849,8 +1845,8 @@ func (h *Handler) createFixedExpense(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
 		return
 	}
-	if req.Title == "" || req.Amount <= 0 || req.DayOfMonth < 1 || req.DayOfMonth > 28 {
-		respondError(w, http.StatusBadRequest, fmt.Errorf("title, amount, and day_of_month(1-28) are required"))
+	if req.Title == "" || req.Amount <= 0 || req.DayOfMonth < 1 || req.DayOfMonth > 31 {
+		respondError(w, http.StatusBadRequest, fmt.Errorf("title, amount, and day_of_month(1-31) are required"))
 		return
 	}
 	if req.Currency == "" {
@@ -1918,6 +1914,10 @@ func (h *Handler) updateFixedExpense(w http.ResponseWriter, r *http.Request) {
 		existing.Amount = *req.Amount
 	}
 	if req.DayOfMonth != nil {
+		if *req.DayOfMonth < 1 || *req.DayOfMonth > 31 {
+			respondError(w, http.StatusBadRequest, fmt.Errorf("day_of_month 는 1~31 이어야 합니다"))
+			return
+		}
 		existing.DayOfMonth = *req.DayOfMonth
 	}
 	if req.IsActive != nil {
@@ -2029,6 +2029,12 @@ func (h *Handler) fixedExpenseSummary(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// clampDay 는 그 달에 없는 날(31일, 2월 30일 등)을 말일로 당긴다.
+func clampDay(year, month, day int) int {
+	last := time.Date(year, time.Month(month)+1, 0, 0, 0, 0, 0, time.UTC).Day()
+	return min(day, last)
+}
+
 // applyFixedExpenses creates Transaction records for unapplied fixed expenses.
 // Already-applied ones (linked via fixed_expense_id) are skipped.
 // Query params: year, month (default: current month).
@@ -2096,11 +2102,7 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Clamp day to valid range for the month.
-		day := fe.DayOfMonth
-		if day > 28 {
-			day = 28
-		}
+		day := clampDay(year, month, fe.DayOfMonth)
 		txDate := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
 		feID := fe.ID
 
@@ -2119,6 +2121,10 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 				Tags:           []string{"고정비", "저축"},
 				Link:           *fe.SavingLink,
 			})
+			if errors.Is(err, repository.ErrDuplicate) {
+				skipped++ // 다른 요청이 먼저 반영했다
+				continue
+			}
 			if err != nil {
 				respondError(w, http.StatusInternalServerError, err)
 				return
@@ -2147,6 +2153,10 @@ func (h *Handler) applyFixedExpenses(w http.ResponseWriter, r *http.Request) {
 		}
 
 		created, err := h.txRepo.Create(r.Context(), tx)
+		if errors.Is(err, repository.ErrDuplicate) {
+			skipped++ // 다른 요청이 먼저 반영했다
+			continue
+		}
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err)
 			return

@@ -3,10 +3,12 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/yourname/couple-app/internal/models"
@@ -146,6 +148,10 @@ func (r *PgTransactionRepository) Create(ctx context.Context, tx *models.Transac
 		tx.FixedExpenseID, slParam, tx.CreatedAt, tx.UpdatedAt,
 	)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, ErrDuplicate
+		}
 		return nil, fmt.Errorf("create transaction: %w", err)
 	}
 	return tx, nil
