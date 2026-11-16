@@ -287,6 +287,22 @@ func (h *Handler) NewRouter() chi.Router {
 
 func (h *Handler) listTransactions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	// 가계부 기간(월 시작일 반영): /api/summary 와 같은 [start_date, end_date)
+	if s, e := q.Get("start_date"), q.Get("end_date"); s != "" && e != "" {
+		start, err1 := time.Parse("2006-01-02", s)
+		end, err2 := time.Parse("2006-01-02", e)
+		if err1 != nil || err2 != nil {
+			respondError(w, http.StatusBadRequest, fmt.Errorf("invalid date format: use YYYY-MM-DD"))
+			return
+		}
+		txns, err := h.txRepo.ListByDateRange(r.Context(), auth.CoupleIDFromCtx(r.Context()), start, end)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
+		respondJSON(w, http.StatusOK, txns)
+		return
+	}
 	yearStr, monthStr := q.Get("year"), q.Get("month")
 	if yearStr != "" && monthStr != "" {
 		year, errY := strconv.Atoi(yearStr)

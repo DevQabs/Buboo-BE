@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -28,5 +30,19 @@ func TestMergeTransaction_빠진필드는그대로(t *testing.T) {
 	}
 	if old.Title != "" || old.SavingLink.LinkAssetID != "a1" {
 		t.Fatal("기존 거래 값이 함께 바뀌었다")
+	}
+}
+
+func TestListTransactions_기간으로조회(t *testing.T) {
+	f := &fakeTxRepo{}
+	h := &Handler{txRepo: f}
+	rec := httptest.NewRecorder()
+	h.listTransactions(rec, httptest.NewRequest(http.MethodGet, "/api/transactions?start_date=2026-10-25&end_date=2026-11-25", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("200 이어야 한다: %d %s", rec.Code, rec.Body)
+	}
+	if !f.start.Equal(time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)) || !f.end.Equal(time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("요약과 같은 기간으로 조회해야 한다: %v ~ %v", f.start, f.end)
 	}
 }
