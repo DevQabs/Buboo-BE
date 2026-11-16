@@ -83,11 +83,12 @@ type StockRepository interface {
 	// Reorder rewrites sort_order from the position of each ID in the slice.
 	Reorder(ctx context.Context, coupleID string, ids []string) error
 
-	// Delete removes a stock asset by ID.
 	// Trade locks the row (SELECT ... FOR UPDATE), lets apply change it, then in the
 	// same DB transaction saves it — or deletes it when quantity reaches 0 — and
 	// appends the log apply returns (nil = no log). Any error rolls everything back.
 	Trade(ctx context.Context, id, coupleID string, apply func(a *models.StockAsset) (*models.StockTransaction, error)) (*models.StockAsset, error)
+
+	// Delete removes a stock asset by ID.
 	Delete(ctx context.Context, id string) error
 
 	// GetPriceSnapshot returns the latest stored price for a symbol.
