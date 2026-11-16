@@ -324,7 +324,8 @@ type CreateStockRequest struct {
 	Currency     string     `json:"currency"`
 	Sector       string     `json:"sector"`
 	Memo         string     `json:"memo"`
-	PurchasedAt  *time.Time `json:"purchased_at"` // nullable — defaults to now
+	ExchangeRate float64    `json:"exchange_rate"` // USD 매수 환율. 0이면 서버가 현재 환율을 쓴다
+	PurchasedAt  *time.Time `json:"purchased_at"`  // nullable — defaults to now
 }
 
 // UpdateStockRequest is the validated DTO for PUT /api/stocks/{id}.
@@ -336,6 +337,7 @@ type UpdateStockRequest struct {
 	AveragePrice *float64 `json:"average_price"`
 	Sector       *string  `json:"sector"`
 	Memo         *string  `json:"memo"`
+	AvgKRWPrice  *float64 `json:"avg_krw_price"` // USD 종목 원화 평단 정정용
 }
 
 // ─────────────────────────────────────────────

@@ -617,6 +617,13 @@ func (h *Handler) createStock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	currency := strings.ToUpper(strings.TrimSpace(req.Currency))
+	fx, err := service.ResolveBuyFX(r.Context(), currency, req.ExchangeRate, h.priceSvc.FetchUSDKRW)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+
 	now := time.Now().UTC()
 	purchasedAt := now
 	if req.PurchasedAt != nil {
@@ -632,7 +639,8 @@ func (h *Handler) createStock(w http.ResponseWriter, r *http.Request) {
 		NameEn:       req.NameEn,
 		Quantity:     req.Quantity,
 		AveragePrice: req.AveragePrice,
-		Currency:     strings.ToUpper(strings.TrimSpace(req.Currency)),
+		Currency:     currency,
+		AvgKRWPrice:  service.KRWAvgAfterBuy(currency, 0, 0, 0, req.Quantity, req.AveragePrice, fx),
 		Sector:       req.Sector,
 		Memo:         req.Memo,
 		PurchasedAt:  purchasedAt,
@@ -698,6 +706,14 @@ func (h *Handler) updateStock(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Memo != nil {
 		existing.Memo = *req.Memo
+	}
+	if req.AvgKRWPrice != nil {
+		// USD 종목 전용. 달러 평단과 앞뒤가 맞지 않는 값은 받지 않는다.
+		if err := service.ValidateKRWCostBasis(existing.AveragePrice, *req.AvgKRWPrice); err != nil {
+			respondError(w, http.StatusBadRequest, err)
+			return
+		}
+		existing.AvgKRWPrice = *req.AvgKRWPrice
 	}
 
 	updated, err := h.stockRepo.Update(r.Context(), existing)
@@ -787,18 +803,13 @@ func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 	// 원화 칼럼에 넣으면 평단이 1,400분의 1로 기록된다 — MCD는 2026-06-08
 	// 환율 0 매수로 277원이 원화 평단이 됐고, 이후 매수와 섞여 18,620원으로
 	// 굳은 뒤 매도가 +72.6만원 이익으로 뒤집혔다.
-	var newAvgKRW float64
-	if asset.Currency == "USD" {
-		if req.ExchangeRate <= 0 {
-			respondError(w, http.StatusBadRequest, fmt.Errorf("매수 환율이 필요합니다"))
-			return
-		}
-		newAvgKRW = service.BlendKRWCostBasis(
-			asset.Quantity, asset.AveragePrice, asset.AvgKRWPrice,
-			req.Quantity, req.Price, req.ExchangeRate)
-	} else {
-		newAvgKRW = newAvg
+	fx, err := service.ResolveBuyFX(ctx, asset.Currency, req.ExchangeRate, h.priceSvc.FetchUSDKRW)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
 	}
+	newAvgKRW := service.KRWAvgAfterBuy(asset.Currency,
+		asset.Quantity, asset.AveragePrice, asset.AvgKRWPrice, req.Quantity, req.Price, fx)
 
 	asset.Quantity = newQty
 	asset.AveragePrice = newAvg
@@ -824,7 +835,7 @@ func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 		Currency:         asset.Currency,
 		AvgPriceAtTx:     newAvg,
 		RealizedPnL:      0,
-		ExchangeRateAtTx: req.ExchangeRate,
+		ExchangeRateAtTx: fx,
 		Memo:             req.Memo,
 	}
 	if _, err := h.stxRepo.Create(ctx, stx); err != nil {
