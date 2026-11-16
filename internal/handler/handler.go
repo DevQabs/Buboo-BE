@@ -52,6 +52,7 @@ type Handler struct {
 	allowOrigins []string
 	uploadsDir   string
 	stor         *supstorage.SupabaseStorage
+	internalSecret []byte
 }
 
 func New(
@@ -74,6 +75,7 @@ func New(
 	allowOrigins []string,
 	uploadsDir string,
 	stor *supstorage.SupabaseStorage,
+	internalSecret []byte,
 ) *Handler {
 	return &Handler{
 		txRepo:       txRepo,
@@ -95,6 +97,7 @@ func New(
 		allowOrigins: allowOrigins,
 		uploadsDir:   uploadsDir,
 		stor:         stor,
+		internalSecret: internalSecret,
 	}
 }
 
@@ -126,9 +129,12 @@ func (h *Handler) NewRouter() chi.Router {
 
 	// ── Public auth routes (no JWT required) ──────────────────────────────────
 	r.Route("/api/auth", func(r chi.Router) {
-		r.Post("/callback", h.authCallback)
-		r.Post("/setup", h.authSetup)
 		r.Get("/invite/{code}", h.getInviteByCode)
+		r.Group(func(r chi.Router) {
+			r.Use(auth.RequireInternalSecret(h.internalSecret))
+			r.Post("/callback", h.authCallback)
+			r.Post("/setup", h.authSetup)
+		})
 	})
 
 	// ── Protected routes (JWT required) ───────────────────────────────────────

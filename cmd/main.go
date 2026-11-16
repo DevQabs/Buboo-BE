@@ -30,6 +30,11 @@ func main() {
 		log.Fatal("JWT_SECRET is required")
 	}
 
+	internalSecret := []byte(os.Getenv("INTERNAL_API_SECRET"))
+	if len(internalSecret) == 0 {
+		log.Fatal("INTERNAL_API_SECRET 환경변수가 필요합니다 (FE 서버와 같은 값)")
+	}
+
 	ctx := context.Background()
 
 	// ── Repositories ─────────────────────────────────────────────────────────
@@ -97,7 +102,7 @@ func main() {
 	r := handler.New(
 		txRepo, stockRepo, stxRepo, userRepo, assetRepo,
 		feRepo, divRepo, scheduleRepo, diaryRepo, catRepo, fridgeRepo,
-		inviteRepo, roadmapRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, stor,
+		inviteRepo, roadmapRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, stor, internalSecret,
 	).NewRouter()
 
 	srv := &http.Server{
