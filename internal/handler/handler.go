@@ -52,6 +52,7 @@ type Handler struct {
 	allowOrigins []string
 	uploadsDir   string
 	stor         *supstorage.SupabaseStorage
+	owner        OwnershipChecker
 	internalSecret []byte
 }
 
@@ -75,6 +76,7 @@ func New(
 	allowOrigins []string,
 	uploadsDir string,
 	stor *supstorage.SupabaseStorage,
+	owner OwnershipChecker,
 	internalSecret []byte,
 ) *Handler {
 	return &Handler{
@@ -97,6 +99,7 @@ func New(
 		allowOrigins: allowOrigins,
 		uploadsDir:   uploadsDir,
 		stor:         stor,
+		owner:        owner,
 		internalSecret: internalSecret,
 	}
 }
@@ -164,6 +167,7 @@ func (h *Handler) NewRouter() chi.Router {
 			// Calendar summary — must be registered BEFORE /{id} to avoid routing conflict
 			r.Get("/calendar-summary", h.calendarSummary) // ?year=&month=
 			r.Route("/{id}", func(r chi.Router) {
+				r.Use(h.owned("transactions"))
 				r.Get("/", h.getTransaction)
 				r.Put("/", h.updateTransaction)
 				r.Delete("/", h.deleteTransaction)
@@ -185,6 +189,7 @@ func (h *Handler) NewRouter() chi.Router {
 			// Must be registered BEFORE /{id} to avoid routing conflict
 			r.Patch("/reorder", h.reorderStocks) // PATCH /api/stocks/reorder
 			r.Route("/{id}", func(r chi.Router) {
+				r.Use(h.owned("stock_assets"))
 				r.Get("/", h.getStock)
 				r.Put("/", h.updateStock)
 				r.Delete("/", h.deleteStock)
@@ -212,6 +217,7 @@ func (h *Handler) NewRouter() chi.Router {
 			// Must be registered BEFORE /{id} to avoid routing conflict
 			r.Patch("/reorder", h.reorderAssets) // PATCH /api/assets/reorder
 			r.Route("/{id}", func(r chi.Router) {
+				r.Use(h.owned("other_assets"))
 				r.Get("/", h.getAsset)                            // 단건 조회
 				r.Put("/", h.updateAsset)                         // 수정 (partial update)
 				r.Delete("/", h.deleteAsset)                      // 삭제
@@ -225,6 +231,7 @@ func (h *Handler) NewRouter() chi.Router {
 			r.Post("/", h.createDividend)        // 배당 이벤트 등록
 			r.Get("/summary", h.dividendSummary) // 연간 요약 (?year=)
 			r.Route("/{id}", func(r chi.Router) {
+				r.Use(h.owned("dividends"))
 				r.Delete("/", h.deleteDividend)   // 삭제
 				r.Post("/apply", h.applyDividend) // 가계부 수입 반영
 			})
@@ -237,6 +244,7 @@ func (h *Handler) NewRouter() chi.Router {
 			r.Get("/summary", h.fixedExpenseSummary)
 			r.Post("/apply", h.applyFixedExpenses)
 			r.Route("/{id}", func(r chi.Router) {
+				r.Use(h.owned("fixed_expenses"))
 				r.Put("/", h.updateFixedExpense)
 				r.Delete("/", h.deleteFixedExpense)
 			})
@@ -247,6 +255,7 @@ func (h *Handler) NewRouter() chi.Router {
 			r.Get("/", h.listSchedules)
 			r.Post("/", h.createSchedule)
 			r.Route("/{id}", func(r chi.Router) {
+				r.Use(h.owned("schedules"))
 				r.Put("/", h.updateSchedule)
 				r.Delete("/", h.deleteSchedule)
 			})
@@ -257,6 +266,7 @@ func (h *Handler) NewRouter() chi.Router {
 			r.Get("/", h.listDiaries)
 			r.Post("/", h.createDiary)
 			r.Route("/{id}", func(r chi.Router) {
+				r.Use(h.owned("diaries"))
 				r.Put("/", h.updateDiary)
 				r.Delete("/", h.deleteDiary)
 				r.Post("/photos", h.uploadDiaryPhoto)

@@ -52,6 +52,7 @@ func main() {
 		fridgeRepo   repository.FridgeRepository
 		inviteRepo   repository.InviteRepository
 		roadmapRepo  repository.RoadmapRepository
+		ownerRepo    *repository.PgOwnership
 	)
 
 	pool, err := db.New(ctx)
@@ -72,6 +73,7 @@ func main() {
 	fridgeRepo   = repository.NewPgFridgeRepository(pool)
 	inviteRepo   = repository.NewPgInviteRepository(pool)
 	roadmapRepo  = repository.NewPgRoadmapRepository(pool)
+	ownerRepo    = repository.NewPgOwnership(pool)
 
 	// ── S3-compatible Storage ─────────────────────────────────────────────────
 	var stor *storage.SupabaseStorage
@@ -102,7 +104,7 @@ func main() {
 	r := handler.New(
 		txRepo, stockRepo, stxRepo, userRepo, assetRepo,
 		feRepo, divRepo, scheduleRepo, diaryRepo, catRepo, fridgeRepo,
-		inviteRepo, roadmapRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, stor, internalSecret,
+		inviteRepo, roadmapRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, stor, ownerRepo, internalSecret,
 	).NewRouter()
 
 	srv := &http.Server{
