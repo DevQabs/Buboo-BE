@@ -772,8 +772,29 @@ func (h *Handler) reorderStocks(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// statusError 는 Trade 안에서 거부한 요청을 HTTP 상태와 함께 돌려준다.
+type statusError struct {
+	status int
+	err    error
+}
+
+func (e statusError) Error() string { return e.err.Error() }
+
+func respondTradeError(w http.ResponseWriter, err error) {
+	var se statusError
+	switch {
+	case errors.As(err, &se):
+		respondError(w, se.status, se.err)
+	case errors.Is(err, repository.ErrNotFound):
+		respondError(w, http.StatusNotFound, fmt.Errorf("not found"))
+	default:
+		respondError(w, http.StatusInternalServerError, err)
+	}
+}
+
 // buyStock — POST /api/stocks/{id}/buy
 // Increases quantity, recalculates weighted-average price, logs immutable transaction.
+// 잔고와 기록은 한 트랜잭션으로 저장된다. 기록이 실패하면 매수도 취소된다.
 func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id := chi.URLParam(r, "id")
@@ -788,15 +809,12 @@ func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	asset, err := h.stockRepo.GetByID(ctx, id)
+	// 환율 조회(네트워크)는 행 잠금을 잡기 전에 끝낸다. 통화는 바뀌지 않으므로 미리 읽는다.
+	pre, err := h.stockRepo.GetByID(ctx, id)
 	if err != nil {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-
-	// Weighted-average cost basis
-	newQty := asset.Quantity + req.Quantity
-	newAvg := (asset.Quantity*asset.AveragePrice + req.Quantity*req.Price) / newQty
 
 	// KRW weighted-average cost basis (uses exchange rate at time of purchase)
 	//
@@ -804,46 +822,46 @@ func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 	// 원화 칼럼에 넣으면 평단이 1,400분의 1로 기록된다 — MCD는 2026-06-08
 	// 환율 0 매수로 277원이 원화 평단이 됐고, 이후 매수와 섞여 18,620원으로
 	// 굳은 뒤 매도가 +72.6만원 이익으로 뒤집혔다.
-	fx, err := service.ResolveBuyFX(ctx, asset.Currency, req.ExchangeRate, h.priceSvc.FetchUSDKRW)
+	fx, err := service.ResolveBuyFX(ctx, pre.Currency, req.ExchangeRate, h.priceSvc.FetchUSDKRW)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
-	newAvgKRW := service.KRWAvgAfterBuy(asset.Currency,
-		asset.Quantity, asset.AveragePrice, asset.AvgKRWPrice, req.Quantity, req.Price, fx)
 
-	asset.Quantity = newQty
-	asset.AveragePrice = newAvg
-	asset.AvgKRWPrice = newAvgKRW
+	coupleID := auth.CoupleIDFromCtx(ctx)
+	updated, err := h.stockRepo.Trade(ctx, id, coupleID, func(asset *models.StockAsset) (*models.StockTransaction, error) {
+		// Weighted-average cost basis
+		newQty := asset.Quantity + req.Quantity
+		newAvg := (asset.Quantity*asset.AveragePrice + req.Quantity*req.Price) / newQty
 
-	updated, err := h.stockRepo.Update(ctx, asset)
+		newAvgKRW := service.KRWAvgAfterBuy(asset.Currency,
+			asset.Quantity, asset.AveragePrice, asset.AvgKRWPrice, req.Quantity, req.Price, fx)
+
+		asset.Quantity = newQty
+		asset.AveragePrice = newAvg
+		asset.AvgKRWPrice = newAvgKRW
+
+		return &models.StockTransaction{
+			CoupleID:         coupleID,
+			UserID:           asset.UserID,
+			StockAssetID:     asset.ID,
+			Symbol:           asset.Symbol,
+			Exchange:         asset.Exchange,
+			Name:             asset.Name,
+			Type:             models.StockTxBuy,
+			Quantity:         req.Quantity,
+			Price:            req.Price,
+			Currency:         asset.Currency,
+			AvgPriceAtTx:     newAvg,
+			ExchangeRateAtTx: fx,
+			Memo:             req.Memo,
+			Source:           models.StockTxSourceTrade,
+		}, nil
+	})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
+		respondTradeError(w, err)
 		return
 	}
-
-	// Append immutable log
-	stx := &models.StockTransaction{
-		CoupleID:         auth.CoupleIDFromCtx(r.Context()),
-		UserID:           asset.UserID,
-		StockAssetID:     asset.ID,
-		Symbol:           asset.Symbol,
-		Exchange:         asset.Exchange,
-		Name:             asset.Name,
-		Type:             models.StockTxBuy,
-		Quantity:         req.Quantity,
-		Price:            req.Price,
-		Currency:         asset.Currency,
-		AvgPriceAtTx:     newAvg,
-		RealizedPnL:      0,
-		ExchangeRateAtTx: fx,
-		Memo:             req.Memo,
-	}
-	if _, err := h.stxRepo.Create(ctx, stx); err != nil {
-		// Log failure is non-fatal for the user — asset is already updated
-		fmt.Printf("warn: stx log failed: %v\n", err)
-	}
-
 	respondJSON(w, http.StatusOK, updated)
 }
 
@@ -864,79 +882,63 @@ func (h *Handler) sellStock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	asset, err := h.stockRepo.GetByID(ctx, id)
-	if err != nil {
-		respondError(w, http.StatusNotFound, err)
-		return
-	}
-	if req.Quantity > asset.Quantity {
-		respondError(w, http.StatusBadRequest, fmt.Errorf("sell quantity (%.4f) exceeds holdings (%.4f)", req.Quantity, asset.Quantity))
-		return
-	}
-
-	// Realized P&L always stored in KRW.
-	//
-	// USD 종목은 원화 취득가가 성해야 원화 손익을 낼 수 있다. 취득가가
-	// 손상됐는데 조용히 달러 손익을 기록하면, 그 값이 KRW로 간주되어
-	// 양도소득세가 1,386배 어긋난다. 그래서 계산 대신 매도를 막는다.
+	coupleID := auth.CoupleIDFromCtx(ctx)
 	var realizedPnL float64
-	if asset.Currency == "USD" {
-		if req.ExchangeRate <= 0 {
-			respondError(w, http.StatusBadRequest, fmt.Errorf("매도 환율이 필요합니다"))
-			return
+	var symbol string
+	updated, err := h.stockRepo.Trade(ctx, id, coupleID, func(asset *models.StockAsset) (*models.StockTransaction, error) {
+		if req.Quantity > asset.Quantity {
+			return nil, statusError{http.StatusBadRequest, fmt.Errorf("sell quantity (%.4f) exceeds holdings (%.4f)", req.Quantity, asset.Quantity)}
 		}
-		if err := service.ValidateKRWCostBasis(asset.AveragePrice, asset.AvgKRWPrice); err != nil {
-			respondError(w, http.StatusUnprocessableEntity, err)
-			return
+
+		// Realized P&L always stored in KRW.
+		//
+		// USD 종목은 원화 취득가가 성해야 원화 손익을 낼 수 있다. 취득가가
+		// 손상됐는데 조용히 달러 손익을 기록하면, 그 값이 KRW로 간주되어
+		// 양도소득세가 1,386배 어긋난다. 그래서 계산 대신 매도를 막는다.
+		if asset.Currency == "USD" {
+			if req.ExchangeRate <= 0 {
+				return nil, statusError{http.StatusBadRequest, fmt.Errorf("매도 환율이 필요합니다")}
+			}
+			if err := service.ValidateKRWCostBasis(asset.AveragePrice, asset.AvgKRWPrice); err != nil {
+				return nil, statusError{http.StatusUnprocessableEntity, err}
+			}
+			// (매도단가 × 환율 - KRW평균매입가) × 수량
+			realizedPnL = (req.Price*req.ExchangeRate - asset.AvgKRWPrice) * req.Quantity
+		} else {
+			realizedPnL = (req.Price - asset.AveragePrice) * req.Quantity
 		}
-		// (매도단가 × 환율 - KRW평균매입가) × 수량
-		realizedPnL = (req.Price*req.ExchangeRate - asset.AvgKRWPrice) * req.Quantity
-	} else {
-		realizedPnL = (req.Price - asset.AveragePrice) * req.Quantity
-	}
-
-	// Append immutable log BEFORE mutating state
-	stx := &models.StockTransaction{
-		CoupleID:         auth.CoupleIDFromCtx(r.Context()),
-		UserID:           asset.UserID,
-		StockAssetID:     asset.ID,
-		Symbol:           asset.Symbol,
-		Exchange:         asset.Exchange,
-		Name:             asset.Name,
-		Type:             models.StockTxSell,
-		Quantity:         req.Quantity,
-		Price:            req.Price,
-		Currency:         asset.Currency,
-		AvgPriceAtTx:     asset.AveragePrice,
-		RealizedPnL:      realizedPnL,
-		ExchangeRateAtTx: req.ExchangeRate,
-		Memo:             req.Memo,
-	}
-	if _, err := h.stxRepo.Create(ctx, stx); err != nil {
-		fmt.Printf("warn: stx log failed: %v\n", err)
-	}
-
-	newQty := asset.Quantity - req.Quantity
-
-	if newQty == 0 {
-		// 잔고 0 → 포트폴리오에서 즉시 제거 (이력은 보존)
-		if err := h.stockRepo.Delete(ctx, id); err != nil {
-			respondError(w, http.StatusInternalServerError, err)
-			return
+		symbol = asset.Symbol
+		log := &models.StockTransaction{
+			CoupleID:         coupleID,
+			UserID:           asset.UserID,
+			StockAssetID:     asset.ID,
+			Symbol:           asset.Symbol,
+			Exchange:         asset.Exchange,
+			Name:             asset.Name,
+			Type:             models.StockTxSell,
+			Quantity:         req.Quantity,
+			Price:            req.Price,
+			Currency:         asset.Currency,
+			AvgPriceAtTx:     asset.AveragePrice,
+			RealizedPnL:      realizedPnL,
+			ExchangeRateAtTx: req.ExchangeRate,
+			Memo:             req.Memo,
+			Source:           models.StockTxSourceTrade,
 		}
+		// 평단은 그대로(평균법). 0 이 되면 Trade 가 종목을 지운다 — 기록은 남는다.
+		asset.Quantity -= req.Quantity
+		return log, nil
+	})
+	if err != nil {
+		respondTradeError(w, err)
+		return
+	}
+	if updated.Quantity <= 0 {
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"removed":      true,
 			"realized_pnl": realizedPnL,
-			"symbol":       asset.Symbol,
+			"symbol":       symbol,
 		})
-		return
-	}
-
-	// avg_price stays the same after sell (average cost method)
-	asset.Quantity = newQty
-	updated, err := h.stockRepo.Update(ctx, asset)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]interface{}{

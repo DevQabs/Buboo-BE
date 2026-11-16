@@ -2,10 +2,12 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/yourname/couple-app/internal/models"
@@ -99,23 +101,72 @@ func (r *PgStockRepository) Create(ctx context.Context, asset *models.StockAsset
 	return asset, nil
 }
 
-func (r *PgStockRepository) Update(ctx context.Context, asset *models.StockAsset) (*models.StockAsset, error) {
-	asset.UpdatedAt = time.Now().UTC()
-	tag, err := r.db.Exec(ctx,
+// updateStockRow 는 풀이나 트랜잭션으로 종목 한 행을 저장한다. 소유자(user_id)도 저장한다.
+func updateStockRow(ctx context.Context, db execer, a *models.StockAsset) error {
+	a.UpdatedAt = time.Now().UTC()
+	tag, err := db.Exec(ctx,
 		`UPDATE stock_assets SET
-		 name=$2, name_en=$3, quantity=$4, average_price=$5,
-		 sector=$6, memo=$7, logo_url=$8, updated_at=$9, avg_krw_price=$10
+		 user_id=$2, name=$3, name_en=$4, quantity=$5, average_price=$6,
+		 sector=$7, memo=$8, logo_url=$9, updated_at=$10, avg_krw_price=$11
 		 WHERE id=$1`,
-		asset.ID, asset.Name, asset.NameEn, asset.Quantity, asset.AveragePrice,
-		asset.Sector, asset.Memo, asset.LogoURL, asset.UpdatedAt, asset.AvgKRWPrice,
+		a.ID, a.UserID, a.Name, a.NameEn, a.Quantity, a.AveragePrice,
+		a.Sector, a.Memo, a.LogoURL, a.UpdatedAt, a.AvgKRWPrice,
 	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("stock %s not found", a.ID)
+	}
+	return nil
+}
+
+func (r *PgStockRepository) Update(ctx context.Context, asset *models.StockAsset) (*models.StockAsset, error) {
+	if err := updateStockRow(ctx, r.db, asset); err != nil {
+		return nil, err
+	}
+	return asset, nil
+}
+
+// Trade 는 매수·매도를 한 DB 트랜잭션으로 처리한다. 종목 행을 FOR UPDATE 로 잠가
+// 동시에 들어온 두 요청이 같은 수량을 읽고 서로 덮어쓰지 못하게 한다. 기록 저장이
+// 실패하면 잔고 변경도 되돌린다.
+func (r *PgStockRepository) Trade(ctx context.Context, id, coupleID string, apply func(*models.StockAsset) (*models.StockTransaction, error)) (*models.StockAsset, error) {
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if tag.RowsAffected() == 0 {
-		return nil, fmt.Errorf("stock %s not found", asset.ID)
+	defer tx.Rollback(ctx)
+
+	a, err := scanStock(tx.QueryRow(ctx,
+		`SELECT `+stockCols+` FROM stock_assets WHERE id = $1 AND couple_id = $2 FOR UPDATE`, id, coupleID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
 	}
-	return asset, nil
+	if err != nil {
+		return nil, err
+	}
+	log, err := apply(a)
+	if err != nil {
+		return nil, err
+	}
+	if a.Quantity <= 0 {
+		_, err = tx.Exec(ctx, `DELETE FROM stock_assets WHERE id = $1`, id)
+	} else {
+		err = updateStockRow(ctx, tx, a)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if log != nil {
+		if err := insertSTx(ctx, tx, log); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return a, nil
 }
 
 // Reorder rewrites sort_order for the given stock asset IDs, using their
