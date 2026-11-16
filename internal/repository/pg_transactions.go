@@ -117,6 +117,13 @@ func (r *PgTransactionRepository) ListByDateRange(ctx context.Context, coupleID 
 	return collectTxRows(rows)
 }
 
+// isFixedExpenseDuplicate 는 고정비 중복 반영 유니크 인덱스 위반일 때만 참이다.
+func isFixedExpenseDuplicate(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" &&
+		pgErr.ConstraintName == "uq_transactions_fixed_expense_date"
+}
+
 func (r *PgTransactionRepository) Create(ctx context.Context, tx *models.Transaction) (*models.Transaction, error) {
 	tx.ID = "txn-" + uuid.NewString()
 	now := time.Now().UTC()
@@ -148,8 +155,7 @@ func (r *PgTransactionRepository) Create(ctx context.Context, tx *models.Transac
 		tx.FixedExpenseID, slParam, tx.CreatedAt, tx.UpdatedAt,
 	)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		if isFixedExpenseDuplicate(err) {
 			return nil, ErrDuplicate
 		}
 		return nil, fmt.Errorf("create transaction: %w", err)

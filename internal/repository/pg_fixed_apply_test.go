@@ -44,3 +44,24 @@ func TestCreate_같은고정비같은날은_한번만(t *testing.T) {
 		t.Fatalf("두 요청 중 정확히 하나만 중복으로 막혀야 한다: 막힌 수 %d", dup)
 	}
 }
+
+func TestCreate_다른유니크위반은_중복으로_보지않는다(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	couple := newCouple(t, pool)
+	insert := func() error {
+		_, err := pool.Exec(ctx, `INSERT INTO transactions (id, couple_id, user_id, type, amount, currency, date, tags, created_at, updated_at)
+			VALUES ('txn-dup-`+couple+`', $1, 'u1', 'expense', 1, 'KRW', now(), '{}', now(), now())`, couple)
+		return err
+	}
+	if err := insert(); err != nil {
+		t.Fatal(err)
+	}
+	err := insert() // 같은 id 로 기본키 위반
+	if err == nil {
+		t.Fatal("기본키 위반이 나야 한다")
+	}
+	if isFixedExpenseDuplicate(err) {
+		t.Fatalf("고정비 인덱스가 아닌 유니크 위반은 중복으로 보면 안 된다: %v", err)
+	}
+}
