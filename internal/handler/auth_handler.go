@@ -2,12 +2,17 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/yourname/couple-app/internal/auth"
 	"github.com/yourname/couple-app/internal/models"
+	"github.com/yourname/couple-app/internal/repository"
 )
 
 // ─────────────────────────────────────────────
@@ -74,51 +79,26 @@ func (h *Handler) authCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. Invite code flow: create user and link to couple
+	// 3. Invite code flow: consume the invite and create the member atomically
 	if req.InviteCode != "" {
-		invite, err := h.inviteRepo.GetInviteByCode(ctx, req.InviteCode)
-		if err != nil || invite == nil {
-			respondError(w, http.StatusBadRequest, errorf("invalid or expired invite code"))
+		created, err := h.inviteRepo.RedeemInvite(ctx, req.InviteCode, models.User{
+			ID:        uuid.New().String(),
+			Name:      req.Nickname, // 비면 초대에 적힌 이름, 그다음 메일 앞부분
+			Email:     req.GoogleEmail,
+			GoogleSub: req.GoogleSub,
+		}, nameFromEmail(req.GoogleEmail))
+		if errors.Is(err, repository.ErrInviteInvalid) {
+			respondError(w, http.StatusBadRequest, err)
 			return
 		}
-
-		// Determine which role is still available
-		role := ""
-		if invite.Role != nil {
-			role = *invite.Role
-		} else {
-			existing, _ := h.userRepo.ListUsers(ctx, invite.CoupleID)
-			taken := map[string]bool{}
-			for _, u := range existing {
-				taken[u.Role] = true
-			}
-			if !taken["husband"] {
-				role = "husband"
-			} else {
-				role = "wife"
-			}
+		if errors.Is(err, repository.ErrUserExists) {
+			respondError(w, http.StatusConflict, err)
+			return
 		}
-
-		nickname := req.Nickname
-		if nickname == "" {
-			nickname = nameFromEmail(req.GoogleEmail)
-		}
-		newUser := &models.User{
-			ID:          uuid.New().String(),
-			CoupleID:    invite.CoupleID,
-			Name:        nickname,
-			Email:       req.GoogleEmail,
-			GoogleSub:   req.GoogleSub,
-			Role:        role,
-			AvatarColor: defaultColor(role),
-		}
-		created, err := h.userRepo.CreateUser(ctx, newUser)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err)
 			return
 		}
-		_ = h.inviteRepo.MarkInviteUsed(ctx, invite.ID, created.ID)
-
 		token, err := auth.IssueToken(h.jwtSecret, created.ID, created.CoupleID, created.Role)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err)
@@ -193,7 +173,8 @@ func (h *Handler) authSetup(w http.ResponseWriter, r *http.Request) {
 		Email:       req.GoogleEmail,
 		GoogleSub:   req.GoogleSub,
 		Role:        req.Role,
-		AvatarColor: defaultColor(req.Role),
+		AvatarColor: models.DefaultAvatarColor(req.Role),
+		IsOwner:     true,
 	}
 	createdUser, err := h.userRepo.CreateUser(ctx, newUser)
 	if err != nil {
@@ -202,7 +183,7 @@ func (h *Handler) authSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate initial invite for partner
-	invite, err := h.inviteRepo.CreateInvite(ctx, createdCouple.ID, createdUser.ID, nil)
+	invite, err := h.inviteRepo.CreateInvite(ctx, createdCouple.ID, createdUser.ID, "spouse", "")
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -243,25 +224,12 @@ func (h *Handler) getInviteByCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existingUsers, _ := h.userRepo.ListUsers(ctx, invite.CoupleID)
-	taken := map[string]bool{}
-	for _, u := range existingUsers {
-		taken[u.Role] = true
-	}
-
-	available := []string{}
-	if !taken["husband"] {
-		available = append(available, "husband")
-	}
-	if !taken["wife"] {
-		available = append(available, "wife")
-	}
-
 	respondJSON(w, http.StatusOK, map[string]any{
-		"couple_id":       invite.CoupleID,
-		"couple_name":     couple.Name,
-		"available_roles": available,
-		"expires_at":      invite.ExpiresAt,
+		"couple_id":   invite.CoupleID,
+		"couple_name": couple.Name,
+		"preset":      invite.Preset,
+		"nickname":    invite.Nickname,
+		"expires_at":  invite.ExpiresAt,
 	})
 }
 
@@ -271,10 +239,29 @@ func (h *Handler) getInviteByCode(w http.ResponseWriter, r *http.Request) {
 // ─────────────────────────────────────────────
 
 func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
-	coupleID := auth.CoupleIDFromCtx(r.Context())
-	userID := auth.UserIDFromCtx(r.Context())
+	var req struct {
+		Preset   string `json:"preset"`
+		Nickname string `json:"nickname"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Preset == "" {
+		req.Preset = "spouse"
+	}
+	if _, ok := models.PresetLevels(req.Preset); !ok {
+		respondError(w, http.StatusBadRequest, errorf("preset must be spouse|grandparent|custom"))
+		return
+	}
+	nickname := strings.TrimSpace(req.Nickname)
+	if utf8.RuneCountInString(nickname) > 30 {
+		respondError(w, http.StatusBadRequest, errorf("nickname must be 30 characters or fewer"))
+		return
+	}
 
-	invite, err := h.inviteRepo.CreateInvite(r.Context(), coupleID, userID, nil)
+	invite, err := h.inviteRepo.CreateInvite(r.Context(),
+		auth.CoupleIDFromCtx(r.Context()), auth.UserIDFromCtx(r.Context()), req.Preset, nickname)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -296,13 +283,6 @@ func nameFromEmail(email string) string {
 		}
 	}
 	return email
-}
-
-func defaultColor(role string) string {
-	if role == "wife" {
-		return "#FDA4AF"
-	}
-	return "#0F4C81"
 }
 
 func errorf(msg string) error {

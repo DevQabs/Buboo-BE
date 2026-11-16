@@ -129,14 +129,18 @@ type UserRepository interface {
 // InviteRepository manages couple invite codes.
 type InviteRepository interface {
 	// GetInviteByCode returns a valid (not expired, not used) invite.
-	// Returns nil, nil if not found or invalid.
 	GetInviteByCode(ctx context.Context, code string) (*models.Invite, error)
 
-	// CreateInvite generates a new invite for a couple.
-	CreateInvite(ctx context.Context, coupleID, createdBy string, role *string) (*models.Invite, error)
+	// CreateInvite generates a new invite carrying a permission preset
+	// (spouse|grandparent|custom) and a display name for the joiner.
+	CreateInvite(ctx context.Context, coupleID, createdBy, preset, nickname string) (*models.Invite, error)
 
-	// MarkInviteUsed records when and by whom an invite was consumed.
-	MarkInviteUsed(ctx context.Context, inviteID, userID string) error
+	// RedeemInvite consumes the invite and creates the member with the preset's
+	// role and permissions in one transaction. ErrInviteInvalid when the code is
+	// used, expired or unknown; ErrUserExists when the email or Google account
+	// already belongs to another user. u.Name may be empty: the invite's
+	// nickname, then fallbackName, fill it.
+	RedeemInvite(ctx context.Context, code string, u models.User, fallbackName string) (*models.User, error)
 
 	// ListInvitesByCouple returns all active (unused, non-expired) invites for a couple.
 	ListInvitesByCouple(ctx context.Context, coupleID string) ([]models.Invite, error)
