@@ -1636,6 +1636,36 @@ func (h *Handler) listDividends(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, divs)
 }
 
+type dividendCalc struct {
+	TaxRate, Total, AfterTax, Rate float64
+	AmountKRW                      int64
+}
+
+// calcDividend 는 세율 기본값과 환율을 정해 배당 금액을 계산한다. 미국 배당에
+// 환율이 없으면 현재 환율을 쓰고, 그마저 없으면 오류다 — 달러를 원으로 적으면
+// 수입이 1,400분의 1로 기록된다.
+func calcDividend(req models.CreateDividendRequest, fetchRate func() (float64, error)) (dividendCalc, error) {
+	c := dividendCalc{TaxRate: 0.154, Rate: req.USDKRWRate} // US 배당소득세 기본값 15.4%
+	if req.TaxRate != nil && *req.TaxRate >= 0 {
+		c.TaxRate = *req.TaxRate
+	}
+	c.Total = req.Quantity * req.AmountPerShare
+	c.AfterTax = c.Total * (1 - c.TaxRate)
+	if strings.ToUpper(req.Currency) != "USD" {
+		c.AmountKRW = int64(math.Round(c.AfterTax))
+		return c, nil
+	}
+	if c.Rate <= 0 {
+		rate, err := fetchRate()
+		if err != nil || rate <= 0 {
+			return c, fmt.Errorf("환율을 가져오지 못했습니다. 환율을 입력해 주세요")
+		}
+		c.Rate = rate
+	}
+	c.AmountKRW = int64(math.Round(c.AfterTax * c.Rate))
+	return c, nil
+}
+
 // createDividend: POST /api/dividends
 // Computes derived fields (total_amount, after_tax_amount, amount_krw) server-side
 // so they are always consistent and stored for later ledger creation.
@@ -1663,17 +1693,10 @@ func (h *Handler) createDividend(w http.ResponseWriter, r *http.Request) {
 	if req.Currency == "" {
 		req.Currency = "USD"
 	}
-	if req.TaxRate <= 0 {
-		req.TaxRate = 0.154 // US 배당소득세 기본값 15.4%
-	}
-
-	total := req.Quantity * req.AmountPerShare
-	afterTax := total * (1 - req.TaxRate)
-	var amountKRW int64
-	if strings.ToUpper(req.Currency) == "USD" && req.USDKRWRate > 0 {
-		amountKRW = int64(afterTax * req.USDKRWRate)
-	} else {
-		amountKRW = int64(afterTax)
+	c, err := calcDividend(req, func() (float64, error) { return h.priceSvc.FetchUSDKRW(r.Context()) })
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
 	}
 
 	d := &models.DividendEvent{
@@ -1686,11 +1709,11 @@ func (h *Handler) createDividend(w http.ResponseWriter, r *http.Request) {
 		Quantity:       req.Quantity,
 		AmountPerShare: req.AmountPerShare,
 		Currency:       req.Currency,
-		TotalAmount:    total,
-		TaxRate:        req.TaxRate,
-		AfterTaxAmount: afterTax,
-		USDKRWRate:     req.USDKRWRate,
-		AmountKRW:      amountKRW,
+		TotalAmount:    c.Total,
+		TaxRate:        c.TaxRate,
+		AfterTaxAmount: c.AfterTax,
+		USDKRWRate:     c.Rate,
+		AmountKRW:      c.AmountKRW,
 		ExDividendDate: req.ExDividendDate,
 		PaymentDate:    req.PaymentDate,
 		Memo:           req.Memo,
@@ -1711,10 +1734,25 @@ func (h *Handler) createDividend(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteDividend(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id := chi.URLParam(r, "id")
-	if err := h.divRepo.Delete(r.Context(), id); err != nil {
+	d, err := h.divRepo.GetByID(ctx, id)
+	if err != nil {
 		respondError(w, http.StatusNotFound, err)
 		return
+	}
+	if err := h.divRepo.Delete(ctx, id); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	// 가계부에 넣은 배당 수입도 지운다. 사용자가 이미 지웠으면 할 일이 없다.
+	if d.TransactionID != "" {
+		if _, err := h.txRepo.GetByID(ctx, d.TransactionID); err == nil {
+			if err := h.txRepo.Delete(ctx, d.TransactionID); err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1743,10 +1781,15 @@ func (h *Handler) applyDividendToLedger(ctx context.Context, d *models.DividendE
 		IsFixed:       false,
 		Tags:          []string{"배당", d.Symbol},
 	}
-	if _, err := h.txRepo.Create(ctx, tx); err != nil {
+	created, err := h.txRepo.Create(ctx, tx)
+	if err != nil {
 		return err
 	}
-	return h.divRepo.MarkApplied(ctx, d.ID)
+	if err := h.divRepo.MarkApplied(ctx, d.ID, created.ID); err != nil {
+		return err
+	}
+	d.IsApplied, d.TransactionID = true, created.ID
+	return nil
 }
 
 // applyDividend: POST /api/dividends/{id}/apply (kept for backward compatibility)

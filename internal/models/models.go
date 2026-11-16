@@ -600,6 +600,7 @@ type DividendEvent struct {
 	ExDividendDate *time.Time `json:"ex_dividend_date,omitempty"` // 배당락일 (optional)
 	PaymentDate    time.Time  `json:"payment_date"`               // 지급일
 	IsApplied      bool       `json:"is_applied"`                 // 가계부에 수입으로 반영됐는지
+	TransactionID  string     `json:"transaction_id,omitempty"`   // 가계부에 만든 수입 거래 id. 배당 삭제 시 함께 지운다
 	Memo           string     `json:"memo"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
@@ -620,7 +621,7 @@ type CreateDividendRequest struct {
 	Quantity       float64    `json:"quantity"`
 	AmountPerShare float64    `json:"amount_per_share"`
 	Currency       string     `json:"currency"`
-	TaxRate        float64    `json:"tax_rate"` // defaults to 0.154
+	TaxRate        *float64   `json:"tax_rate"` // 없거나 음수면 0.154. 0 은 비과세로 그대로 쓴다
 	USDKRWRate     float64    `json:"usd_krw_rate"`
 	ExDividendDate *time.Time `json:"ex_dividend_date,omitempty"`
 	PaymentDate    time.Time  `json:"payment_date"`

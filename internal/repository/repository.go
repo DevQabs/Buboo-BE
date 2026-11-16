@@ -206,8 +206,8 @@ type DividendRepository interface {
 	// Create persists a new dividend event.
 	Create(ctx context.Context, d *models.DividendEvent) (*models.DividendEvent, error)
 
-	// MarkApplied sets is_applied=true after generating a ledger entry.
-	MarkApplied(ctx context.Context, id string) error
+	// MarkApplied sets is_applied=true and remembers the ledger transaction it created.
+	MarkApplied(ctx context.Context, id, txID string) error
 
 	// Delete removes a dividend event by ID.
 	Delete(ctx context.Context, id string) error
