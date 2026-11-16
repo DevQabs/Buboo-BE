@@ -43,9 +43,12 @@ type uploadRequest struct {
 	DurationSec float64 `json:"duration_sec"`
 }
 
-// checkUpload validates type, size, video length and the bucket cap.
+var errStorageFull = errors.New("저장 공간 한도에 도달했습니다. 관리자에게 문의하세요")
+
+// checkUpload validates type, size and video length (the bucket cap is
+// checked atomically by storageRepo.ReserveWithinCap).
 // It returns the key extension, or an HTTP status with a message.
-func checkUpload(req uploadRequest, usedBytes, limitBytes int64) (string, int, error) {
+func checkUpload(req uploadRequest) (string, int, error) {
 	types, ok := uploadTypes[req.Purpose]
 	if !ok {
 		return "", http.StatusBadRequest, errors.New("알 수 없는 업로드 목적입니다")
@@ -59,9 +62,6 @@ func checkUpload(req uploadRequest, usedBytes, limitBytes int64) (string, int, e
 	}
 	if strings.HasPrefix(req.ContentType, "video/") && (req.DurationSec <= 0 || req.DurationSec > maxVideoSeconds) {
 		return "", http.StatusBadRequest, errors.New("영상은 30초 이하만 올릴 수 있습니다")
-	}
-	if usedBytes+req.Size > limitBytes {
-		return "", http.StatusRequestEntityTooLarge, errors.New("저장 공간 한도에 도달했습니다. 관리자에게 문의하세요")
 	}
 	return ext, 0, nil
 }
@@ -92,8 +92,8 @@ func contentTypeOfKey(purpose, key string) string {
 }
 
 // POST /api/media/upload-url — 검사 후 15분 presigned PUT 주소와 키를 준다.
-// 발급 때 요청 크기로 storage_objects 에 기록해 상한 계산에 바로 넣는다.
-// ponytail: 동시 발급 두 건이 같은 합계를 읽으면 상한을 조금 넘을 수 있음 — 9.5GB 여유로 흡수, 문제되면 advisory lock.
+// 발급 전에 요청 크기로 storage_objects 에 예약한다. 상한 검사와 기록은 한 트랜잭션(advisory lock)이라
+// 동시 발급이 함께 STORAGE_LIMIT_BYTES 를 넘지 못한다. 예약이 커밋된 뒤에만 주소를 준다.
 // ponytail: 발급만 받고 안 올린 키도 합계에 남는다(안전한 쪽) — 쌓이면 정리 명령 추가.
 func (h *Handler) createUploadURL(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -115,26 +115,27 @@ func (h *Handler) createUploadURL(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusServiceUnavailable, errors.New("저장소가 설정되지 않았습니다"))
 		return
 	}
-	used, err := h.storageRepo.TotalBytes(ctx)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	ext, status, err := checkUpload(req, used, h.storageLimit)
+	ext, status, err := checkUpload(req)
 	if err != nil {
 		respondError(w, status, err)
 		return
 	}
 	coupleID := auth.CoupleIDFromCtx(ctx)
 	key := objectKey(coupleID, req.Purpose, ext)
-	url, err := h.media.PresignPut(ctx, key, req.ContentType, req.Size, presignPutTTL)
+	ok, err = h.storageRepo.ReserveWithinCap(ctx, models.StorageObject{
+		Key: key, CoupleID: coupleID, Purpose: req.Purpose, SizeBytes: req.Size,
+	}, h.storageLimit)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if err := h.storageRepo.Record(ctx, models.StorageObject{
-		Key: key, CoupleID: coupleID, Purpose: req.Purpose, SizeBytes: req.Size,
-	}); err != nil {
+	if !ok {
+		respondError(w, http.StatusRequestEntityTooLarge, errStorageFull)
+		return
+	}
+	url, err := h.media.PresignPut(ctx, key, req.ContentType, req.Size, presignPutTTL)
+	if err != nil {
+		_ = h.storageRepo.Delete(ctx, []string{key})
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}

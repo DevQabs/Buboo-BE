@@ -179,6 +179,9 @@ type PermissionRepository interface {
 type StorageRepository interface {
 	// Record inserts a row; an existing key is left as is.
 	Record(ctx context.Context, o models.StorageObject) error
+	// ReserveWithinCap records o only if the bucket total stays <= limit,
+	// atomically with the check. false means the cap would be exceeded.
+	ReserveWithinCap(ctx context.Context, o models.StorageObject, limit int64) (bool, error)
 	// Get returns nil, nil when the key was never issued.
 	Get(ctx context.Context, key string) (*models.StorageObject, error)
 	Delete(ctx context.Context, keys []string) error

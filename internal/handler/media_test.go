@@ -10,39 +10,31 @@ import (
 )
 
 func TestCheckUpload(t *testing.T) {
-	const limit = int64(9_500_000_000)
 	cases := []struct {
 		name       string
 		req        uploadRequest
-		used       int64
 		wantStatus int
 		wantExt    string
 	}{
-		{"일기 사진 통과", uploadRequest{"diary", "image/jpeg", 5 << 20, 0}, 0, 0, "jpg"},
-		{"일기 HEIC 통과", uploadRequest{"diary", "image/heic", 5 << 20, 0}, 0, 0, "heic"},
-		{"일기에 영상은 거부", uploadRequest{"diary", "video/mp4", 5 << 20, 10}, 0, http.StatusBadRequest, ""},
-		{"모르는 목적 거부", uploadRequest{"x", "image/jpeg", 1, 0}, 0, http.StatusBadRequest, ""},
-		{"모르는 형식 거부", uploadRequest{"baby", "image/gif", 1, 0}, 0, http.StatusBadRequest, ""},
-		{"0바이트 거부", uploadRequest{"baby", "image/png", 0, 0}, 0, http.StatusBadRequest, ""},
-		{"100MB 정확히 통과", uploadRequest{"baby", "video/mp4", 100 << 20, 10}, 0, 0, "mp4"},
-		{"100MB 초과 거부", uploadRequest{"baby", "video/mp4", 100<<20 + 1, 10}, 0, http.StatusBadRequest, ""},
-		{"영상 30.5초 통과", uploadRequest{"baby", "video/quicktime", 1 << 20, 30.5}, 0, 0, "mov"},
-		{"영상 30.6초 거부", uploadRequest{"baby", "video/quicktime", 1 << 20, 30.6}, 0, http.StatusBadRequest, ""},
-		{"영상 길이 없음 거부", uploadRequest{"baby", "video/mp4", 1 << 20, 0}, 0, http.StatusBadRequest, ""},
-		{"상한 딱 맞으면 통과", uploadRequest{"baby", "image/jpeg", 10, 0}, limit - 10, 0, "jpg"},
-		{"상한 넘으면 413", uploadRequest{"baby", "image/jpeg", 11, 0}, limit - 10, http.StatusRequestEntityTooLarge, ""},
+		{"일기 사진 통과", uploadRequest{"diary", "image/jpeg", 5 << 20, 0}, 0, "jpg"},
+		{"일기 HEIC 통과", uploadRequest{"diary", "image/heic", 5 << 20, 0}, 0, "heic"},
+		{"일기에 영상은 거부", uploadRequest{"diary", "video/mp4", 5 << 20, 10}, http.StatusBadRequest, ""},
+		{"모르는 목적 거부", uploadRequest{"x", "image/jpeg", 1, 0}, http.StatusBadRequest, ""},
+		{"모르는 형식 거부", uploadRequest{"baby", "image/gif", 1, 0}, http.StatusBadRequest, ""},
+		{"0바이트 거부", uploadRequest{"baby", "image/png", 0, 0}, http.StatusBadRequest, ""},
+		{"100MB 정확히 통과", uploadRequest{"baby", "video/mp4", 100 << 20, 10}, 0, "mp4"},
+		{"100MB 초과 거부", uploadRequest{"baby", "video/mp4", 100<<20 + 1, 10}, http.StatusBadRequest, ""},
+		{"영상 30.5초 통과", uploadRequest{"baby", "video/quicktime", 1 << 20, 30.5}, 0, "mov"},
+		{"영상 30.6초 거부", uploadRequest{"baby", "video/quicktime", 1 << 20, 30.6}, http.StatusBadRequest, ""},
+		{"영상 길이 없음 거부", uploadRequest{"baby", "video/mp4", 1 << 20, 0}, http.StatusBadRequest, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			ext, status, err := checkUpload(c.req, c.used, limit)
+			ext, status, err := checkUpload(c.req)
 			if status != c.wantStatus || ext != c.wantExt || (err == nil) != (c.wantStatus == 0) {
 				t.Fatalf("got ext=%q status=%d err=%v, want ext=%q status=%d", ext, status, err, c.wantExt, c.wantStatus)
 			}
 		})
-	}
-	_, _, err := checkUpload(uploadRequest{"baby", "image/jpeg", 11, 0}, limit-10, limit)
-	if err.Error() != "저장 공간 한도에 도달했습니다. 관리자에게 문의하세요" {
-		t.Errorf("상한 문구: %q", err)
 	}
 }
 
