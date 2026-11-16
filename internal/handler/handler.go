@@ -5,6 +5,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -340,7 +341,11 @@ func (h *Handler) createTransaction(w http.ResponseWriter, r *http.Request) {
 			Link:          *req.SavingLink,
 		})
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, err)
+			status := http.StatusInternalServerError
+			if errors.Is(err, service.ErrBuyFX) {
+				status = http.StatusBadRequest
+			}
+			respondError(w, status, err)
 			return
 		}
 		respondJSON(w, http.StatusCreated, created)

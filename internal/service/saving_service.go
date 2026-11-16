@@ -28,6 +28,7 @@ type SavingService struct {
 	stockRepo repository.StockRepository
 	stxRepo   repository.StockTransactionRepository
 	assetRepo repository.OtherAssetRepository
+	usdKRW    func(context.Context) (float64, error) // 저축 경유 USD 매수 환율 조회 (PriceService.FetchUSDKRW)
 }
 
 func NewSavingService(
@@ -35,12 +36,14 @@ func NewSavingService(
 	stockRepo repository.StockRepository,
 	stxRepo repository.StockTransactionRepository,
 	assetRepo repository.OtherAssetRepository,
+	usdKRW func(context.Context) (float64, error),
 ) *SavingService {
 	return &SavingService{
 		txRepo:    txRepo,
 		stockRepo: stockRepo,
 		stxRepo:   stxRepo,
 		assetRepo: assetRepo,
+		usdKRW:    usdKRW,
 	}
 }
 
@@ -139,6 +142,7 @@ func (s *SavingService) applyStock(ctx context.Context, tx *models.Transaction, 
 		price    float64
 		avgAfter float64
 		assetID  string
+		fx       float64
 	)
 
 	if link.LinkAssetID != "" {
@@ -156,6 +160,13 @@ func (s *SavingService) applyStock(ctx context.Context, tx *models.Transaction, 
 
 		qty = link.AddStockQty
 		price = link.AddStockPrice
+
+		fx, err = ResolveBuyFX(ctx, asset.Currency, 0, s.usdKRW)
+		if err != nil {
+			return err
+		}
+		asset.AvgKRWPrice = KRWAvgAfterBuy(asset.Currency,
+			asset.Quantity, asset.AveragePrice, asset.AvgKRWPrice, qty, price, fx)
 
 		// Weighted-average cost basis
 		totalCost := asset.AveragePrice*asset.Quantity + price*qty
@@ -178,9 +189,14 @@ func (s *SavingService) applyStock(ctx context.Context, tx *models.Transaction, 
 			return fmt.Errorf("new_stock_qty and new_stock_price must be > 0")
 		}
 
-		cur := link.NewStockCurrency
+		cur := strings.ToUpper(strings.TrimSpace(link.NewStockCurrency))
 		if cur == "" {
 			cur = "USD"
+		}
+		var err error
+		fx, err = ResolveBuyFX(ctx, cur, 0, s.usdKRW)
+		if err != nil {
+			return err
 		}
 		newAsset := &models.StockAsset{
 			CoupleID:     tx.CoupleID,
@@ -190,7 +206,8 @@ func (s *SavingService) applyStock(ctx context.Context, tx *models.Transaction, 
 			Name:         link.NewStockName,
 			Quantity:     link.NewStockQty,
 			AveragePrice: link.NewStockPrice,
-			Currency:     strings.ToUpper(strings.TrimSpace(cur)),
+			AvgKRWPrice:  KRWAvgAfterBuy(cur, 0, 0, 0, link.NewStockQty, link.NewStockPrice, fx),
+			Currency:     cur,
 			Sector:       link.NewStockSector,
 			PurchasedAt:  tx.Date,
 		}
@@ -209,19 +226,20 @@ func (s *SavingService) applyStock(ctx context.Context, tx *models.Transaction, 
 
 	// Step 3: append immutable stock transaction log (non-fatal)
 	stx := &models.StockTransaction{
-		CoupleID:     tx.CoupleID,
-		UserID:       tx.UserID,
-		StockAssetID: assetID,
-		Symbol:       symbol,
-		Exchange:     exchange,
-		Name:         name,
-		Type:         models.StockTxBuy,
-		Quantity:     qty,
-		Price:        price,
-		Currency:     currency,
-		AvgPriceAtTx: avgAfter,
-		Memo:         tx.Memo,
-		ExecutedAt:   tx.Date,
+		CoupleID:         tx.CoupleID,
+		UserID:           tx.UserID,
+		StockAssetID:     assetID,
+		Symbol:           symbol,
+		Exchange:         exchange,
+		Name:             name,
+		Type:             models.StockTxBuy,
+		Quantity:         qty,
+		Price:            price,
+		Currency:         currency,
+		AvgPriceAtTx:     avgAfter,
+		ExchangeRateAtTx: fx,
+		Memo:             tx.Memo,
+		ExecutedAt:       tx.Date,
 	}
 	if _, err := s.stxRepo.Create(ctx, stx); err != nil {
 		fmt.Printf("warn: stx log failed for saving tx %s: %v\n", tx.ID, err)
