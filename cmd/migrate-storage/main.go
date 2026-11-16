@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"mime"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
@@ -38,12 +39,34 @@ func plan(photo, legacyPrefix, coupleID string) step {
 	switch {
 	case strings.HasPrefix(photo, legacyPrefix):
 		name := strings.TrimPrefix(photo, legacyPrefix)
+		if u, err := url.PathUnescape(name); err == nil {
+			name = u // 공개 URL 은 퍼센트 인코딩돼 있다
+		}
 		return step{kind: "copy", src: name, key: coupleID + "/diary/" + path.Base(name)}
 	case strings.HasPrefix(photo, coupleID+"/diary/"):
 		return step{kind: "key", key: photo}
 	default:
 		return step{kind: "skip"}
 	}
+}
+
+// collisions lists keys that two different sources would both write to
+// (path.Base flattens Supabase subfolders).
+func collisions(items []item) []string {
+	srcOf := map[string]string{}
+	var out []string
+	for _, it := range items {
+		if it.kind != "copy" {
+			continue
+		}
+		k := it.coupleID + "|" + it.key
+		if prev, ok := srcOf[k]; ok && prev != it.src {
+			out = append(out, fmt.Sprintf("%s <- %q, %q", it.key, prev, it.src))
+		} else if !ok {
+			srcOf[k] = it.src
+		}
+	}
+	return out
 }
 
 type item struct {
@@ -101,7 +124,15 @@ func main() {
 		log.Fatalf("일기 조회 실패: %v", err)
 	}
 
+	if c := collisions(items); len(c) > 0 {
+		for _, l := range c {
+			fmt.Println("같은 키로 겹침:", l)
+		}
+		log.Fatal("서로 다른 원본이 같은 R2 키가 됩니다. 진행하지 않습니다.")
+	}
+
 	// 1) 미리보기: 크기 확인
+	seen := map[string]bool{}
 	var copyN, copyBytes, keyN, recordN, skipN int64
 	for i := range items {
 		it := &items[i]
@@ -110,8 +141,11 @@ func main() {
 			if it.size, err = src.Head(ctx, it.src); err != nil {
 				log.Fatalf("원본 크기 확인 실패 (일기 %s, %s): %v", it.diaryID, it.photo, err)
 			}
-			copyN++
-			copyBytes += it.size
+			if k := it.coupleID + "|" + it.src; !seen[k] { // 같은 원본은 한 번만 센다
+				seen[k] = true
+				copyN++
+				copyBytes += it.size
+			}
 		case "key":
 			keyN++
 			o, err := store.Get(ctx, it.key)
@@ -163,7 +197,7 @@ func main() {
 				log.Fatalf("사용량 기록 실패 (%s): %v", it.key, err)
 			}
 			if _, err := pool.Exec(ctx,
-				`UPDATE diaries SET photos = array_replace(photos, $2, $3), updated_at = NOW() WHERE id = $1`,
+				`UPDATE diaries SET photos = array_replace(photos, $2, $3) WHERE id = $1`,
 				it.diaryID, it.photo, it.key); err != nil {
 				log.Fatalf("일기 갱신 실패 (%s): %v", it.diaryID, err)
 			}
