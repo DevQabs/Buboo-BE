@@ -162,7 +162,7 @@ func ResolveBuyFX(ctx context.Context, currency string, reqFX float64, fetch fun
 	if fx <= 0 {
 		got, err := fetch(ctx)
 		if err != nil {
-			return 0, fmt.Errorf("%w: 현재 환율 조회에 실패했습니다(%v). 환율을 직접 입력해 주세요", ErrBuyFX, err)
+			return 0, fmt.Errorf("%w: 환율을 가져오지 못했습니다(%v). 잠시 후 다시 시도해 주세요", ErrBuyFX, err)
 		}
 		fx = got
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -261,6 +262,10 @@ func TestResolveBuyFX_FailsWhenNoRateIsAvailable(t *testing.T) {
 	_, err := ResolveBuyFX(context.Background(), "USD", 0, fixedFX(0, errors.New("timeout")))
 	if !errors.Is(err, ErrBuyFX) {
 		t.Errorf("환율 조회 실패는 ErrBuyFX 여야 한다: got %v", err)
+	}
+	// 저축 경로는 환율 입력칸이 없다. 직접 입력하라는 안내는 틀린 말이다.
+	if err != nil && strings.Contains(err.Error(), "직접 입력") {
+		t.Errorf("환율 조회 실패 문구는 입력 경로와 무관해야 한다: %v", err)
 	}
 }
 
