@@ -96,8 +96,9 @@ type User struct {
 	Name        string    `json:"name"`
 	Email       string    `json:"email"`
 	GoogleSub   string    `json:"google_sub,omitempty"`
-	Role        string    `json:"role"`         // "husband" | "wife"
+	Role        string    `json:"role"`         // "husband" | "wife" | "family"
 	AvatarColor string    `json:"avatar_color"` // hex color for UI
+	IsOwner     bool      `json:"is_owner"`     // 그룹 만든 사람. 권한 행 없이 전체 edit
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -107,6 +108,8 @@ type Invite struct {
 	CoupleID  string     `json:"couple_id"`
 	Code      string     `json:"code"`
 	Role      *string    `json:"role,omitempty"`
+	Preset    string     `json:"preset"`   // spouse | grandparent | custom
+	Nickname  string     `json:"nickname"` // 가입자 닉네임 기본값 (예: 친정엄마)
 	CreatedBy string     `json:"created_by"`
 	ExpiresAt time.Time  `json:"expires_at"`
 	UsedAt    *time.Time `json:"used_at,omitempty"`

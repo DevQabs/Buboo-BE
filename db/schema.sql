@@ -17,8 +17,35 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT NOT NULL DEFAULT '',
     role TEXT NOT NULL,
     avatar_color TEXT NOT NULL DEFAULT '#4F46E5',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    google_sub TEXT UNIQUE,
+    is_owner BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub);
+CREATE UNIQUE INDEX IF NOT EXISTS users_one_owner_per_couple ON users (couple_id) WHERE is_owner;
+
+CREATE TABLE IF NOT EXISTS member_permissions (
+    user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    menu    TEXT NOT NULL,  -- baby_photo|baby_growth|ledger|schedule|diary|assets|roadmap
+    level   TEXT NOT NULL CHECK (level IN ('hidden', 'view', 'edit')),
+    PRIMARY KEY (user_id, menu)
+);
+
+CREATE TABLE IF NOT EXISTS couple_invites (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    couple_id TEXT NOT NULL REFERENCES couples(id) ON DELETE CASCADE,
+    code TEXT NOT NULL UNIQUE,
+    role TEXT,
+    preset TEXT NOT NULL DEFAULT 'spouse',
+    nickname TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '7 days',
+    used_at TIMESTAMPTZ,
+    used_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_invites_code ON couple_invites(code);
 
 CREATE TABLE IF NOT EXISTS transactions (
     id TEXT PRIMARY KEY,
