@@ -918,3 +918,40 @@ type StorageObject struct {
 	Purpose   string // diary|baby
 	SizeBytes int64
 }
+
+// ── 아기 (설계서 6절) ────────────────────────────────────────────
+
+type Baby struct {
+	Name      string `json:"name"`
+	BirthDate string `json:"birth_date"` // YYYY-MM-DD
+	Sex       string `json:"sex"`        // male|female (성장 표준 곡선 선택)
+}
+
+type BabyMedia struct {
+	ID          string `json:"id"`
+	MomentID    string `json:"moment_id"`
+	Kind        string `json:"kind"` // image|video
+	Key         string `json:"key"`
+	ContentType string `json:"content_type"`
+	SizeBytes   int64  `json:"size_bytes"`
+	SortOrder   int    `json:"sort_order"`
+	URL         string `json:"url"` // 응답 때만: 1시간 presigned GET
+}
+
+type BabyMoment struct {
+	ID        string      `json:"id"`
+	UserID    string      `json:"user_id"` // 작성자
+	Date      string      `json:"date"`    // YYYY-MM-DD
+	Content   string      `json:"content"`
+	Media     []BabyMedia `json:"media"`
+	CreatedAt time.Time   `json:"created_at"`
+}
+
+type BabyGrowth struct {
+	ID         string   `json:"id"`
+	MeasuredOn string   `json:"measured_on"` // YYYY-MM-DD
+	HeightCm   *float64 `json:"height_cm"`
+	WeightKg   *float64 `json:"weight_kg"`
+	HeadCm     *float64 `json:"head_cm"`
+	Memo       string   `json:"memo"`
+}

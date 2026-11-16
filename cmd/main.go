@@ -75,6 +75,7 @@ func main() {
 	ownerRepo = repository.NewPgOwnership(pool)
 	permRepo := repository.NewPgPermissionRepository(pool)
 	storageRepo := repository.NewPgStorageRepository(pool)
+	babyRepo := repository.NewPgBabyRepository(pool)
 
 	// ── 미디어 저장소 (R2 등 S3 호환, 설계서 5절) ──────────────────────────────
 	var media *storage.Client
@@ -105,7 +106,7 @@ func main() {
 	r := handler.New(
 		txRepo, stockRepo, stxRepo, userRepo, assetRepo,
 		feRepo, divRepo, scheduleRepo, diaryRepo, catRepo,
-		inviteRepo, roadmapRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, ownerRepo, internalSecret, permRepo, media, storageRepo, storageLimit,
+		inviteRepo, roadmapRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, ownerRepo, internalSecret, permRepo, media, storageRepo, storageLimit, babyRepo,
 	).NewRouter()
 
 	srv := &http.Server{

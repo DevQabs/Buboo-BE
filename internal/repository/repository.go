@@ -185,6 +185,27 @@ type StorageRepository interface {
 	TotalBytes(ctx context.Context) (int64, error)
 }
 
+// BabyRepository stores the couple's one baby, photo moments and growth records.
+type BabyRepository interface {
+	Get(ctx context.Context, coupleID string) (*models.Baby, error) // nil, nil when not registered
+	Put(ctx context.Context, coupleID string, b models.Baby) error
+
+	ListMoments(ctx context.Context, coupleID string) ([]models.BabyMoment, error)
+	GetMoment(ctx context.Context, id string) (*models.BabyMoment, error)
+	// CreateMoment inserts m and m.Media in one transaction and fills their IDs.
+	CreateMoment(ctx context.Context, coupleID string, m *models.BabyMoment) error
+	// UpdateMoment updates date/content and appends add after the existing media.
+	UpdateMoment(ctx context.Context, coupleID string, m *models.BabyMoment, add []models.BabyMedia) error
+	DeleteMoment(ctx context.Context, id string) error // media rows go by ON DELETE CASCADE
+	GetMedia(ctx context.Context, id string) (*models.BabyMedia, error)
+	DeleteMedia(ctx context.Context, id string) error
+
+	ListGrowth(ctx context.Context, coupleID string) ([]models.BabyGrowth, error)
+	CreateGrowth(ctx context.Context, coupleID string, g *models.BabyGrowth) error
+	UpdateGrowth(ctx context.Context, g *models.BabyGrowth) error
+	DeleteGrowth(ctx context.Context, id string) error
+}
+
 // ─────────────────────────────────────────────
 //  Filter helpers (used by service / handler layers)
 // ─────────────────────────────────────────────

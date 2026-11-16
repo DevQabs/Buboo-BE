@@ -56,6 +56,7 @@ type Handler struct {
 	media          *supstorage.Client
 	storageRepo    repository.StorageRepository
 	storageLimit   int64
+	babyRepo       repository.BabyRepository
 }
 
 func New(
@@ -82,6 +83,7 @@ func New(
 	media *supstorage.Client,
 	storageRepo repository.StorageRepository,
 	storageLimit int64,
+	babyRepo repository.BabyRepository,
 ) *Handler {
 	return &Handler{
 		txRepo:         txRepo,
@@ -107,6 +109,7 @@ func New(
 		media:          media,
 		storageRepo:    storageRepo,
 		storageLimit:   storageLimit,
+		babyRepo:       babyRepo,
 	}
 }
 
@@ -296,6 +299,40 @@ func (h *Handler) NewRouter() chi.Router {
 				r.Delete("/", h.deleteDiary)
 				r.Post("/photos", h.addDiaryPhoto)      // {key}
 				r.Delete("/photos", h.deleteDiaryPhoto) // ?key=
+			})
+		})
+
+		// 아기 (설계서 6절)
+		r.Route("/baby", func(r chi.Router) {
+			r.With(requireMenu("baby_photo", "baby_growth")).Get("/", h.getBaby)
+			r.With(requireMenu()).Put("/", h.putBaby) // owner 전용
+
+			r.Route("/moments", func(r chi.Router) {
+				r.Use(requireMenu("baby_photo"))
+				r.Get("/", h.listMoments)
+				r.Post("/", h.createMoment)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Use(h.owned("baby_moments"))
+					r.Put("/", h.updateMoment)
+					r.Delete("/", h.deleteMoment)
+				})
+			})
+
+			r.Route("/media/{id}", func(r chi.Router) {
+				r.Use(requireMenu("baby_photo"))
+				r.Use(h.owned("baby_media"))
+				r.Delete("/", h.deleteMedia)
+			})
+
+			r.Route("/growth", func(r chi.Router) {
+				r.Use(requireMenu("baby_growth"))
+				r.Get("/", h.listGrowth)
+				r.Post("/", h.createGrowth)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Use(h.owned("baby_growth"))
+					r.Put("/", h.updateGrowth)
+					r.Delete("/", h.deleteGrowth)
+				})
 			})
 		})
 	})

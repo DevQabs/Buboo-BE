@@ -17,6 +17,9 @@ var ownedTables = map[string]bool{
 	"fixed_expenses": true,
 	"schedules":      true,
 	"diaries":        true,
+	"baby_moments":   true,
+	"baby_media":     true,
+	"baby_growth":    true,
 }
 
 type PgOwnership struct{ db *pgxpool.Pool }
