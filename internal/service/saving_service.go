@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -322,15 +323,15 @@ func (s *SavingService) RevertSaving(ctx context.Context, tx *models.Transaction
 					return nil, err
 				}
 				if fx > 0 {
-					a.AvgKRWPrice = (a.AvgKRWPrice*a.Quantity - price*qty*fx) / left
+					a.AvgKRWPrice = revertAvg(a.AvgKRWPrice, a.Quantity, price*fx, qty)
 				}
 			}
-			a.AveragePrice = (a.AveragePrice*a.Quantity - price*qty) / left
+			a.AveragePrice = revertAvg(a.AveragePrice, a.Quantity, price, qty)
 			if a.Currency != "USD" {
 				a.AvgKRWPrice = a.AveragePrice
 			}
 		}
-		a.Quantity = left // 0 이하면 Trade 가 종목을 지운다
+		a.Quantity = max(left, 0) // 0 이면 Trade 가 종목을 지운다
 		return nil, nil
 	})
 	if errors.Is(err, repository.ErrNotFound) {
@@ -339,21 +340,36 @@ func (s *SavingService) RevertSaving(ctx context.Context, tx *models.Transaction
 	return err
 }
 
+// revertAvg 는 평단 avg 로 qty 주를 가진 상태에서 단가 price 로 산 n 주를 뺀 평단이다.
+// 저축 뒤에 팔았으면 빼는 매수 금액이 남은 금액보다 커서 0 이하가 나온다. 그때는 되돌릴
+// 근거가 없으니 지금 평단을 둔다.
+func revertAvg(avg, qty, price, n float64) float64 {
+	v := (avg*qty - price*n) / (qty - n)
+	if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return avg
+	}
+	return v
+}
+
 // savingBuyFX 는 저축 거래가 USD 종목을 살 때 매매 기록에 남긴 환율이다. 없으면 0.
-// 저축 거래와 매매 기록은 id 로 이어지지 않아 종목·수량·단가·날짜로 찾는다.
+// 저축 거래와 매매 기록은 id 로 이어지지 않아 종목·수량·단가로 찾는다. 거래 날짜는
+// 나중에 고칠 수 있어 조건에 넣지 않고, 여러 건이면 거래 날짜에 가장 가까운 기록을 쓴다.
 func (s *SavingService) savingBuyFX(ctx context.Context, tx *models.Transaction, a *models.StockAsset, qty, price float64) (float64, error) {
 	rows, err := s.stxRepo.ListBySymbol(ctx, tx.CoupleID, a.Symbol)
 	if err != nil {
 		return 0, err
 	}
-	day := tx.Date.UTC().Format(time.DateOnly)
+	fx, best := 0.0, time.Duration(math.MaxInt64)
 	for _, r := range rows {
-		if r.Source == models.StockTxSourceSaving && r.StockAssetID == a.ID && r.Type == models.StockTxBuy &&
-			r.Quantity == qty && r.Price == price && r.ExecutedAt.UTC().Format(time.DateOnly) == day {
-			return r.ExchangeRateAtTx, nil
+		if r.Source != models.StockTxSourceSaving || r.StockAssetID != a.ID || r.Type != models.StockTxBuy ||
+			r.Quantity != qty || r.Price != price {
+			continue
+		}
+		if d := r.ExecutedAt.Sub(tx.Date).Abs(); d < best {
+			fx, best = r.ExchangeRateAtTx, d
 		}
 	}
-	return 0, nil
+	return fx, nil
 }
 
 // ResizeSaving 은 저축 금액을 고칠 때 연결된 예금·일반 자산을 차액만큼 옮긴다.

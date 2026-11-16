@@ -269,3 +269,33 @@ func TestResizeSaving_예금은_차액만큼옮긴다(t *testing.T) {
 		t.Fatalf("30만→50만 수정이면 자산이 20만 늘어야 한다: %d, err=%v", assets.m["a1"].ValueKRW, err)
 	}
 }
+
+func TestRevertSaving_저축뒤에팔았으면_음수평단대신기존평단을둔다(t *testing.T) {
+	// 10주@100 + 저축 10주@300 = 20주@200, 9주 매도 → 11주@200. 저축을 지우면 1주가 남고 계산상 평단은 -800.
+	for cur, krw := range map[string]float64{"KRW": 200, "USD": 260_000} {
+		stocks := &memStocks{m: map[string]*models.StockAsset{"s1": {ID: "s1", CoupleID: "c1", Symbol: "X", Quantity: 11, AveragePrice: 200, AvgKRWPrice: krw, Currency: cur}}}
+		stx := &memSTx{rows: []models.StockTransaction{{CoupleID: "c1", Symbol: "X", StockAssetID: "s1", Type: models.StockTxBuy,
+			Source: models.StockTxSourceSaving, Quantity: 10, Price: 300, ExchangeRateAtTx: 1300, ExecutedAt: savingDay}}}
+		s := NewSavingService(nil, stocks, stx, &memAssets{}, nil)
+
+		err := s.RevertSaving(context.Background(), linkedSavingTx(3_000, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "s1", AddStockQty: 10, AddStockPrice: 300}))
+		got := stocks.m["s1"]
+		if err != nil || got.Quantity != 1 || got.AveragePrice != 200 || got.AvgKRWPrice != krw {
+			t.Fatalf("%s: 1주에 기존 평단이 남아야 한다: %+v, err=%v", cur, got, err)
+		}
+	}
+}
+
+func TestRevertSaving_날짜를고친저축도_매수환율을찾는다(t *testing.T) {
+	stocks := &memStocks{m: map[string]*models.StockAsset{"s1": {ID: "s1", CoupleID: "c1", Symbol: "NU", Quantity: 20, AveragePrice: 15, AvgKRWPrice: 20_500, Currency: "USD"}}}
+	stx := &memSTx{rows: []models.StockTransaction{{CoupleID: "c1", Symbol: "NU", StockAssetID: "s1", Type: models.StockTxBuy,
+		Source: models.StockTxSourceSaving, Quantity: 10, Price: 20, ExchangeRateAtTx: 1400, ExecutedAt: savingDay}}}
+	s := NewSavingService(nil, stocks, stx, &memAssets{}, nil)
+	tx := linkedSavingTx(280_000, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "s1", AddStockQty: 10, AddStockPrice: 20})
+	tx.Date = savingDay.AddDate(0, 0, 5) // 거래 날짜만 나중에 고침
+
+	err := s.RevertSaving(context.Background(), tx)
+	if got := stocks.m["s1"]; err != nil || math.Abs(got.AvgKRWPrice-13_000) > 1e-6 {
+		t.Fatalf("원화 평단이 13,000 으로 돌아가야 한다: %+v, err=%v", got, err)
+	}
+}
