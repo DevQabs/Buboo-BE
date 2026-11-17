@@ -2430,6 +2430,8 @@ func respondError(w http.ResponseWriter, status int, err error) {
 //  Schedule handlers
 // ─────────────────────────────────────────────
 
+var errBadReminders = errors.New("알림 시점이 일정 종류와 맞지 않습니다")
+
 func (h *Handler) listSchedules(w http.ResponseWriter, r *http.Request) {
 	yearStr := r.URL.Query().Get("year")
 	monthStr := r.URL.Query().Get("month")
@@ -2473,6 +2475,7 @@ func (h *Handler) createSchedule(w http.ResponseWriter, r *http.Request) {
 		IsAnniversary: req.IsAnniversary,
 		DDayLabel:     req.DDayLabel,
 		Color:         req.Color,
+		Reminders:     req.Reminders,
 	}
 	if req.EndDate != nil {
 		endDate, err := time.Parse("2006-01-02", *req.EndDate)
@@ -2481,6 +2484,10 @@ func (h *Handler) createSchedule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.EndDate = &endDate
+	}
+	if !models.ValidReminders(s.AllDay, s.Reminders) {
+		respondError(w, http.StatusBadRequest, errBadReminders)
+		return
 	}
 	if s.Color == "" {
 		s.Color = "indigo"
@@ -2541,6 +2548,13 @@ func (h *Handler) updateSchedule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		existing.EndDate = &d
+	}
+	if req.Reminders != nil {
+		existing.Reminders = *req.Reminders
+	}
+	if !models.ValidReminders(existing.AllDay, existing.Reminders) {
+		respondError(w, http.StatusBadRequest, errBadReminders)
+		return
 	}
 	updated, err := h.scheduleRepo.Update(r.Context(), existing)
 	if err != nil {

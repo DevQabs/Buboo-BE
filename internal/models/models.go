@@ -29,7 +29,8 @@ type Schedule struct {
 	IsDDay        bool       `json:"is_dday"`
 	IsAnniversary bool       `json:"is_anniversary"` // 지나도 D+N 으로 센다
 	DDayLabel     string     `json:"dday_label"`
-	Color         string     `json:"color"` // "indigo"|"rose"|"emerald"|"amber"|"sky"
+	Color         string     `json:"color"`     // "indigo"|"rose"|"emerald"|"amber"|"sky"
+	Reminders     []string   `json:"reminders"` // 알림 시점 코드(push 설계서 3절)
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 }
@@ -39,28 +40,30 @@ type SchedulesFile struct {
 }
 
 type CreateScheduleRequest struct {
-	UserID        string  `json:"user_id"`
-	Title         string  `json:"title"`
-	Description   string  `json:"description"`
-	StartDate     string  `json:"start_date"` // YYYY-MM-DD
-	EndDate       *string `json:"end_date,omitempty"`
-	AllDay        bool    `json:"all_day"`
-	IsDDay        bool    `json:"is_dday"`
-	IsAnniversary bool    `json:"is_anniversary"`
-	DDayLabel     string  `json:"dday_label"`
-	Color         string  `json:"color"`
+	UserID        string   `json:"user_id"`
+	Title         string   `json:"title"`
+	Description   string   `json:"description"`
+	StartDate     string   `json:"start_date"` // YYYY-MM-DD
+	EndDate       *string  `json:"end_date,omitempty"`
+	AllDay        bool     `json:"all_day"`
+	IsDDay        bool     `json:"is_dday"`
+	IsAnniversary bool     `json:"is_anniversary"`
+	DDayLabel     string   `json:"dday_label"`
+	Color         string   `json:"color"`
+	Reminders     []string `json:"reminders"`
 }
 
 type UpdateScheduleRequest struct {
-	Title         *string `json:"title,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	StartDate     *string `json:"start_date,omitempty"`
-	EndDate       *string `json:"end_date,omitempty"`
-	AllDay        *bool   `json:"all_day,omitempty"`
-	IsDDay        *bool   `json:"is_dday,omitempty"`
-	IsAnniversary *bool   `json:"is_anniversary,omitempty"`
-	DDayLabel     *string `json:"dday_label,omitempty"`
-	Color         *string `json:"color,omitempty"`
+	Title         *string   `json:"title,omitempty"`
+	Description   *string   `json:"description,omitempty"`
+	StartDate     *string   `json:"start_date,omitempty"`
+	EndDate       *string   `json:"end_date,omitempty"`
+	AllDay        *bool     `json:"all_day,omitempty"`
+	IsDDay        *bool     `json:"is_dday,omitempty"`
+	IsAnniversary *bool     `json:"is_anniversary,omitempty"`
+	DDayLabel     *string   `json:"dday_label,omitempty"`
+	Color         *string   `json:"color,omitempty"`
+	Reminders     *[]string `json:"reminders,omitempty"`
 }
 
 // ─────────────────────────────────────────────
