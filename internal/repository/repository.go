@@ -312,6 +312,20 @@ type ScheduleRepository interface {
 	Delete(ctx context.Context, id string) error
 }
 
+// PushRepository stores web push subscriptions and hands out due schedule reminders (push 설계서 2·4절).
+type PushRepository interface {
+	// SaveSubscription upserts by endpoint; the endpoint moves to userID.
+	SaveSubscription(ctx context.Context, userID, userAgent string, s models.PushSubscription) error
+	// DeleteSubscription removes the endpoint only when it belongs to userID.
+	DeleteSubscription(ctx context.Context, userID, endpoint string) error
+	// DeleteEndpoint removes a subscription the push service reported gone (404/410).
+	DeleteEndpoint(ctx context.Context, endpoint string) error
+	ListSubscriptions(ctx context.Context, userIDs []string) ([]models.PushSubscription, error)
+	// ClaimDue stamps sent_at on up to limit due, unsent reminders and returns them.
+	// A row is returned at most once, even if sending it later fails.
+	ClaimDue(ctx context.Context, now time.Time, limit int) ([]models.DueReminder, error)
+}
+
 // ─────────────────────────────────────────────
 //  Diary Repository
 // ─────────────────────────────────────────────

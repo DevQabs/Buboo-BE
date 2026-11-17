@@ -76,6 +76,7 @@ func main() {
 	permRepo := repository.NewPgPermissionRepository(pool)
 	storageRepo := repository.NewPgStorageRepository(pool)
 	babyRepo := repository.NewPgBabyRepository(pool)
+	pushRepo := repository.NewPgPushRepository(pool)
 
 	// ── 미디어 저장소 (R2 등 S3 호환, 설계서 5절) ──────────────────────────────
 	var media *storage.Client
@@ -98,6 +99,13 @@ func main() {
 
 	uploadsDir := filepath.Join(dataDir, "uploads") // 이전 전 로컬 사진 표시용(읽기 전용)
 
+	// ── 웹 푸시 (push 설계서 6절) — VAPID 미설정이면 푸시만 끈다 ──────────────
+	vapidPublic := os.Getenv("VAPID_PUBLIC_KEY")
+	pusher := handler.NewWebPush(vapidPublic, os.Getenv("VAPID_PRIVATE_KEY"), os.Getenv("VAPID_SUBJECT"))
+	if pusher == nil {
+		log.Println("VAPID_* 미설정 — 웹 푸시 꺼짐(구독 API 503, run 은 아무것도 안 함)")
+	}
+
 	// ── Services ──────────────────────────────────────────────────────────────
 	priceSvc := service.NewPriceService()
 	savingSvc := service.NewSavingService(txRepo, stockRepo, stxRepo, assetRepo, priceSvc.FetchUSDKRW)
@@ -106,7 +114,7 @@ func main() {
 	r := handler.New(
 		txRepo, stockRepo, stxRepo, userRepo, assetRepo,
 		feRepo, divRepo, scheduleRepo, diaryRepo, catRepo,
-		inviteRepo, roadmapRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, ownerRepo, internalSecret, permRepo, media, storageRepo, storageLimit, babyRepo,
+		inviteRepo, roadmapRepo, priceSvc, savingSvc, jwtSecret, allowedOrigins, uploadsDir, ownerRepo, internalSecret, permRepo, media, storageRepo, storageLimit, babyRepo, pushRepo, pusher, vapidPublic, []byte(os.Getenv("PUSH_CRON_SECRET")),
 	).NewRouter()
 
 	srv := &http.Server{

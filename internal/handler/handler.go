@@ -58,6 +58,10 @@ type Handler struct {
 	storageRepo    repository.StorageRepository
 	storageLimit   int64
 	babyRepo       repository.BabyRepository
+	pushRepo       repository.PushRepository
+	push           PushSender // nil 이면 푸시 꺼짐
+	vapidPublic    string
+	pushCronSecret []byte
 }
 
 func New(
@@ -85,6 +89,10 @@ func New(
 	storageRepo repository.StorageRepository,
 	storageLimit int64,
 	babyRepo repository.BabyRepository,
+	pushRepo repository.PushRepository,
+	push PushSender,
+	vapidPublic string,
+	pushCronSecret []byte,
 ) *Handler {
 	return &Handler{
 		txRepo:         txRepo,
@@ -111,6 +119,10 @@ func New(
 		storageRepo:    storageRepo,
 		storageLimit:   storageLimit,
 		babyRepo:       babyRepo,
+		pushRepo:       pushRepo,
+		push:           push,
+		vapidPublic:    vapidPublic,
+		pushCronSecret: pushCronSecret,
 	}
 }
 
@@ -165,6 +177,11 @@ func (h *Handler) NewRouter() chi.Router {
 		r.Get("/users", h.listUsers)
 		r.Get("/couple", h.getCouple)
 		r.Get("/me/permissions", h.myPermissions)
+
+		// 웹 푸시 — 구성원 누구나(아기 탭만 보는 부모님 포함). push 설계서 4절
+		r.Get("/push/public-key", h.pushPublicKey)
+		r.Post("/push/subscriptions", h.savePushSubscription)
+		r.Delete("/push/subscriptions", h.deletePushSubscription)
 
 		// owner 전용 — requireMenu() 에 메뉴가 없으면 owner 만 통과
 		r.Route("/members", func(r chi.Router) {
