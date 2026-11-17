@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
+	"net/netip"
 	"strings"
+	"syscall"
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
@@ -20,6 +23,40 @@ type PushSender interface {
 }
 
 type webPush struct{ public, private, subject string }
+
+var (
+	errBlockedAddr = errors.New("push: 내부 주소로는 보내지 않습니다")
+	cgnat          = netip.MustParsePrefix("100.64.0.0/10")
+)
+
+// publicDialControl 은 연결 직전 실제 IP 를 보고 내부망·루프백·링크로컬·멀티캐스트·CGNAT 를 막는다.
+// endpoint 는 사용자가 보낸 값이라(SSRF) 호스트 이름이 아니라 연결 IP 로 판단한다 — DNS 재바인딩도 여기서 막힌다.
+// 푸시 서비스 호스트는 브라우저마다 달라 허용 목록을 두지 않는다.
+func publicDialControl(_, address string, _ syscall.RawConn) error {
+	ap, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return err
+	}
+	ip := ap.Addr().Unmap()
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
+		ip.IsMulticast() || cgnat.Contains(ip) {
+		return errBlockedAddr
+	}
+	return nil
+}
+
+// pushClient: 5초 제한, 리다이렉트 따라가지 않음, 환경 프록시 없음(Proxy nil — 프록시를 거치면 위 검사가 무의미하다).
+var pushClient = &http.Client{
+	Timeout:       5 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	Transport: &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: 5 * time.Second, Control: publicDialControl}).DialContext,
+		ForceAttemptHTTP2:   true,
+		TLSHandshakeTimeout: 5 * time.Second,
+		MaxIdleConns:        10,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
 
 // NewWebPush 는 VAPID 값이 하나라도 비면 nil 을 준다 — 푸시만 꺼지고 서버는 뜬다(push 설계서 6절).
 func NewWebPush(public, private, subject string) PushSender {
@@ -38,6 +75,7 @@ func (p webPush) Send(ctx context.Context, sub models.PushSubscription, payload 
 			VAPIDPrivateKey: p.private,
 			TTL:             24 * 60 * 60,
 			Urgency:         webpush.Urgency(urgency),
+			HTTPClient:      pushClient,
 		})
 	if err != nil {
 		return 0, err
@@ -64,11 +102,13 @@ func (h *Handler) savePushSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var s models.PushSubscription
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
-	if !strings.HasPrefix(s.Endpoint, "https://") || s.Keys.P256dh == "" || s.Keys.Auth == "" {
+	if !strings.HasPrefix(s.Endpoint, "https://") || len(s.Endpoint) > 1024 ||
+		s.Keys.P256dh == "" || s.Keys.Auth == "" || len(s.Keys.P256dh) > 256 || len(s.Keys.Auth) > 256 {
 		respondError(w, http.StatusBadRequest, errors.New("구독 정보가 올바르지 않습니다"))
 		return
 	}
@@ -89,6 +129,7 @@ func (h *Handler) deletePushSubscription(w http.ResponseWriter, r *http.Request)
 	var body struct {
 		Endpoint string `json:"endpoint"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		respondError(w, http.StatusBadRequest, err)
 		return
