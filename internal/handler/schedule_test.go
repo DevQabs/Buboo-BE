@@ -12,7 +12,8 @@ import (
 
 type fakeSchedules struct {
 	repository.ScheduleRepository
-	saved *models.Schedule
+	saved   *models.Schedule
+	deleted string
 }
 
 func (f *fakeSchedules) Create(_ context.Context, s *models.Schedule) (*models.Schedule, error) {
@@ -52,5 +53,25 @@ func TestScheduleReminders_검사(t *testing.T) {
 	}
 	if rec := do(h, "u1", http.MethodPut, "/api/schedules/s1", `{"title":"b"}`); rec.Code != http.StatusOK || !slices.Equal(sch.saved.Reminders, []string{"d1_9"}) {
 		t.Errorf("reminders 없이 수정하면 기존 값 유지: %d %v", rec.Code, sch.saved.Reminders)
+	}
+}
+
+func (f *fakeSchedules) Delete(_ context.Context, id string) error {
+	f.deleted = id
+	return nil
+}
+
+// 다른 커플 일정은 h.owned("schedules") 가 404 로 막아 저장소(수정·삭제·알림 재계산)까지 가지 않는다.
+func TestSchedule_다른_커플_일정은_404(t *testing.T) {
+	sch := &fakeSchedules{}
+	h := newPermHandler(&fakePerms{perms: map[string]*models.Permissions{"u1": ownerPerms}}, nil)
+	h.scheduleRepo = sch
+	h.owner = &fakeOwner{owned: map[string]string{"s9": "c2"}}
+
+	if rec := do(h, "u1", http.MethodPut, "/api/schedules/s9", `{"title":"x","reminders":["d1_9"]}`); rec.Code != http.StatusNotFound || sch.saved != nil {
+		t.Errorf("다른 커플 일정 수정: %d, saved=%v", rec.Code, sch.saved)
+	}
+	if rec := do(h, "u1", http.MethodDelete, "/api/schedules/s9", ""); rec.Code != http.StatusNotFound || sch.deleted != "" {
+		t.Errorf("다른 커플 일정 삭제: %d, deleted=%q", rec.Code, sch.deleted)
 	}
 }
