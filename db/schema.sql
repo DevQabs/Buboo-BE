@@ -247,6 +247,7 @@ CREATE TABLE IF NOT EXISTS schedules (
     is_anniversary BOOLEAN NOT NULL DEFAULT FALSE,
     dday_label TEXT NOT NULL DEFAULT '',
     color TEXT NOT NULL DEFAULT 'indigo',
+    reminders TEXT[] NOT NULL DEFAULT '{}', -- 알림 시점 코드(push 설계서 3절)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -396,3 +397,28 @@ CREATE TABLE IF NOT EXISTS baby_growth (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_baby_growth_couple ON baby_growth(couple_id, measured_on);
+
+-- ─────────────────────────────────────────────
+--  웹 푸시 (2026-11-17-push-design.md 2절)
+-- ─────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    user_agent TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id);
+
+CREATE TABLE IF NOT EXISTS push_reminders (
+    id TEXT PRIMARY KEY,
+    schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+    due_at TIMESTAMPTZ NOT NULL,
+    kind TEXT NOT NULL,
+    sent_at TIMESTAMPTZ,
+    UNIQUE (schedule_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_push_reminders_due ON push_reminders(due_at) WHERE sent_at IS NULL;
