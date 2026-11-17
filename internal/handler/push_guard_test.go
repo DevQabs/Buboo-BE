@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/yourname/couple-app/internal/models"
@@ -71,4 +72,40 @@ func TestPushSubscriptionAPI_길이_제한(t *testing.T) {
 		`{"endpoint":"https://x","pad":"`+strings.Repeat("a", 9<<10)+`"}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("삭제 본문 8KiB 초과: %d, want 400", rec.Code)
 	}
+}
+
+// ctxSender 는 받은 ctx 의 남은 시간을 적고, panicky 면 패닉한다.
+type ctxSender struct {
+	left    []time.Duration
+	panicky bool
+}
+
+func (c *ctxSender) Send(ctx context.Context, _ models.PushSubscription, _ []byte, _ string) (int, error) {
+	if c.panicky {
+		panic("boom")
+	}
+	d, _ := ctx.Deadline()
+	c.left = append(c.left, time.Until(d))
+	return http.StatusCreated, nil
+}
+
+func TestNotify_기기마다_5초_제한(t *testing.T) {
+	s := &ctxSender{}
+	h := &Handler{userRepo: &fakeUsers{users: family}, permRepo: levelPerms{levels: familyLevels},
+		pushRepo: &fakePushRepo{subs: familySubs()}, push: s}
+	h.notifyBabyMedia(context.Background(), "c1", "mom", "m1", "사진")
+	if len(s.left) != 2 {
+		t.Fatalf("2곳에 보내야 한다: %v", s.left)
+	}
+	for _, l := range s.left {
+		if l <= 0 || l > pushSendTimeout {
+			t.Errorf("발송 ctx 남은 시간 %v, want 0 < x <= %v", l, pushSendTimeout)
+		}
+	}
+}
+
+func TestNotifyBabyMedia_패닉은_삼킨다(t *testing.T) {
+	h := &Handler{userRepo: &fakeUsers{users: family}, permRepo: levelPerms{levels: familyLevels},
+		pushRepo: &fakePushRepo{subs: familySubs()}, push: &ctxSender{panicky: true}}
+	h.notifyBabyMedia(context.Background(), "c1", "mom", "m1", "사진") // 패닉이 새면 테스트 프로세스가 죽는다
 }

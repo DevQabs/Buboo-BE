@@ -189,7 +189,9 @@ func (h *Handler) notify(ctx context.Context, coupleID, menu, except string, msg
 	}
 	payload, _ := json.Marshal(msg)
 	for _, s := range subs {
-		status, err := h.push.Send(ctx, s, payload, urgency)
+		sctx, cancel := context.WithTimeout(ctx, pushSendTimeout) // 느린 기기 하나가 run 20초를 다 쓰지 않게
+		status, err := h.push.Send(sctx, s, payload, urgency)
+		cancel()
 		switch {
 		case err != nil:
 			log.Printf("push: 발송 실패: %v", err)
@@ -202,6 +204,9 @@ func (h *Handler) notify(ctx context.Context, coupleID, menu, except string, msg
 		}
 	}
 }
+
+// pushSendTimeout 은 기기 한 곳에 보내는 제한 시간(pushClient.Timeout 과 같다).
+const pushSendTimeout = 5 * time.Second
 
 // 서버가 오래 잠들어 있다 깨어나도 묵은 알림을 한꺼번에 보내지 않는다(push 설계서 4절).
 const pushStaleAfter = 24 * time.Hour
@@ -251,6 +256,11 @@ func mediaWord(media []models.BabyMedia) string {
 // notifyBabyMedia 는 새 사진·영상을 아기 사진일기를 볼 수 있는 다른 구성원에게 알린다. 요청 한 번에 1건.
 // 요청 흐름을 막지 않게 고루틴으로 부른다 — 서버가 꺼지며 끊겨도 괜찮다(push 설계서 5절).
 func (h *Handler) notifyBabyMedia(ctx context.Context, coupleID, uploaderID, momentID, what string) {
+	defer func() { // 고루틴에서 돌므로 패닉이 서버를 죽이지 않게 한다
+		if p := recover(); p != nil {
+			log.Printf("push: 사진 알림 패닉: %v", p)
+		}
+	}()
 	if h.push == nil {
 		return
 	}
