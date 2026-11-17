@@ -162,6 +162,9 @@ func (h *Handler) NewRouter() chi.Router {
 		})
 	})
 
+	// Supabase Cron 전용 — PUSH_CRON_SECRET 만 확인. INTERNAL_API_SECRET 과 분리(push 설계서 4절)
+	r.With(auth.RequireHeaderSecret("X-Push-Cron-Secret", h.pushCronSecret)).Post("/internal/push/run", h.runPush)
+
 	// ── Protected routes (JWT required) ───────────────────────────────────────
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireAuth(h.jwtSecret))

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/yourname/couple-app/internal/auth"
@@ -97,4 +99,130 @@ func (h *Handler) deletePushSubscription(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// pushMessage 는 서비스 워커(public/sw.js)가 읽는 알림 내용.
+type pushMessage struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	URL   string `json:"url"`
+	Tag   string `json:"tag"`
+}
+
+// canReceive 는 menu 를 볼 수 있는 구성원 ID 를 users 순서대로 준다(except 제외).
+// 판정은 requireMenu 와 같은 Permissions.Allows(읽기).
+func canReceive(users []models.User, levels map[string]map[string]string, menu, except string) []string {
+	var out []string
+	for _, u := range users {
+		if u.ID == except {
+			continue
+		}
+		if (models.Permissions{IsOwner: u.IsOwner, Menus: levels[u.ID]}).Allows(false, menu) {
+			out = append(out, u.ID)
+		}
+	}
+	return out
+}
+
+// notify 는 couple 에서 menu 를 볼 수 있는 구성원(except 제외)의 모든 기기에 보낸다.
+// 404·410 은 끊긴 구독이라 지운다. 실패는 로그만 남긴다(한 번 놓치면 끝, push 설계서 4절).
+func (h *Handler) notify(ctx context.Context, coupleID, menu, except string, msg pushMessage, urgency string) {
+	users, err := h.userRepo.ListUsers(ctx, coupleID)
+	if err != nil {
+		log.Printf("push: 구성원 조회 실패: %v", err)
+		return
+	}
+	levels, err := h.permRepo.ListByCouple(ctx, coupleID)
+	if err != nil {
+		log.Printf("push: 권한 조회 실패: %v", err)
+		return
+	}
+	ids := canReceive(users, levels, menu, except)
+	if len(ids) == 0 {
+		return
+	}
+	subs, err := h.pushRepo.ListSubscriptions(ctx, ids)
+	if err != nil {
+		log.Printf("push: 구독 조회 실패: %v", err)
+		return
+	}
+	payload, _ := json.Marshal(msg)
+	for _, s := range subs {
+		status, err := h.push.Send(ctx, s, payload, urgency)
+		switch {
+		case err != nil:
+			log.Printf("push: 발송 실패: %v", err)
+		case status == http.StatusNotFound || status == http.StatusGone:
+			if err := h.pushRepo.DeleteEndpoint(ctx, s.Endpoint); err != nil {
+				log.Printf("push: 끊긴 구독 삭제 실패: %v", err)
+			}
+		case status >= 300:
+			log.Printf("push: 푸시 서비스 응답 %d", status)
+		}
+	}
+}
+
+// 서버가 오래 잠들어 있다 깨어나도 묵은 알림을 한꺼번에 보내지 않는다(push 설계서 4절).
+const pushStaleAfter = 24 * time.Hour
+
+// POST /internal/push/run — Supabase Cron 이 보낼 알림이 있을 때만 1분마다 부른다.
+func (h *Handler) runPush(w http.ResponseWriter, r *http.Request) {
+	if h.push == nil {
+		respondJSON(w, http.StatusOK, map[string]int{"sent": 0, "skipped": 0})
+		return
+	}
+	// pg_net 이 5초에 연결을 끊어도 이미 잡은(sent_at 을 찍은) 알림은 끝까지 보낸다
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 20*time.Second)
+	defer cancel()
+	now := time.Now()
+	due, err := h.pushRepo.ClaimDue(ctx, now, 100)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	sent, skipped := 0, 0
+	for _, d := range due {
+		if now.Sub(d.DueAt) > pushStaleAfter {
+			skipped++
+			continue
+		}
+		h.notify(ctx, d.CoupleID, "schedule", "", pushMessage{
+			Title: "우리집 일정",
+			Body:  d.Title + " · " + models.ReminderLabel(d.Kind),
+			URL:   "/dashboard?tab=life&menu=schedule",
+			Tag:   d.ScheduleID + "-" + d.Kind,
+		}, "high")
+		sent++
+	}
+	respondJSON(w, http.StatusOK, map[string]int{"sent": sent, "skipped": skipped})
+}
+
+// mediaWord: 사진이 하나라도 있으면 "사진", 영상뿐이면 "영상".
+func mediaWord(media []models.BabyMedia) string {
+	for _, m := range media {
+		if m.Kind == "image" {
+			return "사진"
+		}
+	}
+	return "영상"
+}
+
+// notifyBabyMedia 는 새 사진·영상을 아기 사진일기를 볼 수 있는 다른 구성원에게 알린다. 요청 한 번에 1건.
+// 요청 흐름을 막지 않게 고루틴으로 부른다 — 서버가 꺼지며 끊겨도 괜찮다(push 설계서 5절).
+func (h *Handler) notifyBabyMedia(ctx context.Context, coupleID, uploaderID, momentID, what string) {
+	if h.push == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	name := "가족"
+	if u, err := h.userRepo.GetUser(ctx, uploaderID); err == nil {
+		name = u.Name
+	}
+	h.notify(ctx, coupleID, "baby_photo", uploaderID, pushMessage{
+		Title: "우리집",
+		Body:  name + "님이 아기 " + what + "을 올렸어요",
+		URL:   "/dashboard?tab=baby&menu=baby_photo",
+		Tag:   "baby-" + momentID,
+	}, "normal")
 }

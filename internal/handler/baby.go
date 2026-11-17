@@ -160,6 +160,9 @@ func (h *Handler) createMoment(w http.ResponseWriter, r *http.Request) {
 		momentSaveError(w, err)
 		return
 	}
+	if len(media) > 0 {
+		go h.notifyBabyMedia(context.WithoutCancel(ctx), coupleID, auth.UserIDFromCtx(ctx), m.ID, mediaWord(media))
+	}
 	h.withMediaURLs(ctx, m)
 	respondJSON(w, http.StatusCreated, m)
 }
@@ -186,6 +189,9 @@ func (h *Handler) updateMoment(w http.ResponseWriter, r *http.Request) {
 	if err := h.babyRepo.UpdateMoment(ctx, coupleID, m, add); err != nil {
 		momentSaveError(w, err)
 		return
+	}
+	if len(add) > 0 {
+		go h.notifyBabyMedia(context.WithoutCancel(ctx), coupleID, auth.UserIDFromCtx(ctx), id, mediaWord(add))
 	}
 	updated, err := h.babyRepo.GetMoment(ctx, id)
 	if err != nil {
