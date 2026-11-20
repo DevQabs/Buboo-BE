@@ -117,9 +117,16 @@ func (h *Handler) correctStockTx(w http.ResponseWriter, r *http.Request, req *mo
 		if a != nil {
 			cur = service.Position{Qty: a.Quantity, Avg: a.AveragePrice, AvgKRW: a.AvgKRWPrice}
 		}
-		open, err := service.Opening(usd, cur, txs)
+		// 고치기 전 기록이 지금 상태를 그대로 재현해야 고친다. 아니면 손대지 않은 매도 손익까지 바뀐다.
+		open, err := service.CheckLedger(usd, cur, txs)
+		if errors.Is(err, service.ErrLedgerFX) {
+			return ch, statusError{http.StatusUnprocessableEntity, err}
+		}
 		if err != nil {
 			return ch, statusError{http.StatusConflict, err}
+		}
+		if req == nil && a != nil && len(txs) == 1 && txs[0].Source == models.StockTxSourceInitial {
+			return ch, statusError{http.StatusConflict, fmt.Errorf("처음 등록한 기록만 남아 있어요. 종목을 없애려면 종목 삭제를 써 주세요")}
 		}
 		next := slices.Clone(txs)
 		if req == nil {

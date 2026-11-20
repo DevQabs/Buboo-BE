@@ -133,3 +133,48 @@ func TestOpeningThenReplay_고치지않으면그대로다(t *testing.T) {
 	}
 
 }
+
+func TestCheckLedger_반영순서와거래일순서가다르면_맞지않는다(t *testing.T) {
+	// 기록 없이 10주@100 → 13:00 5주@150 매도(손익 250) → 나중에 저장된 저축 5주@200 이 12:00 으로 찍힘. 지금 10주@150.
+	sell := models.StockTransaction{ID: "s", Type: models.StockTxSell, Quantity: 5, Price: 150, AvgPriceAtTx: 100, RealizedPnL: 250,
+		ExecutedAt: replayDay0.Add(3 * time.Hour), CreatedAt: replayDay0.Add(3 * time.Hour)}
+	buy := models.StockTransaction{ID: "b", Type: models.StockTxBuy, Quantity: 5, Price: 200, Source: models.StockTxSourceSaving,
+		ExecutedAt: replayDay0.Add(2 * time.Hour), CreatedAt: replayDay0.Add(4 * time.Hour)}
+	txs := []models.StockTransaction{buy, sell}
+	SortStockTxs(txs)
+	if _, err := CheckLedger(false, Position{10, 150, 150}, txs); !errors.Is(err, ErrLedgerMismatch) {
+		t.Fatalf("손익 250 이 0 으로 바뀌므로 ErrLedgerMismatch 여야 한다: %v", err)
+	}
+}
+
+func TestCheckLedger_손으로평단을고친뒤판기록은_맞지않는다(t *testing.T) {
+	// initial 10@100 → 5주@150 매도(250) → 평단을 120 으로 손으로 고침 → 5주@150 매도(150). 다 팔아 종목 없음.
+	txs := []models.StockTransaction{
+		{ID: "i", Type: models.StockTxBuy, Quantity: 10, Price: 100, Source: models.StockTxSourceInitial, ExecutedAt: replayDay0},
+		{ID: "s1", Type: models.StockTxSell, Quantity: 5, Price: 150, AvgPriceAtTx: 100, RealizedPnL: 250, ExecutedAt: replayDay0.AddDate(0, 0, 1)},
+		{ID: "s2", Type: models.StockTxSell, Quantity: 5, Price: 150, AvgPriceAtTx: 120, RealizedPnL: 150, ExecutedAt: replayDay0.AddDate(0, 0, 2)},
+	}
+	if _, err := CheckLedger(false, Position{}, txs); !errors.Is(err, ErrLedgerMismatch) {
+		t.Fatalf("두 번째 매도 손익 150 이 250 으로 바뀌므로 ErrLedgerMismatch 여야 한다: %v", err)
+	}
+	// 손대지 않은 기록이면 통과한다
+	txs[2].AvgPriceAtTx, txs[2].RealizedPnL = 100, 250
+	if open, err := CheckLedger(false, Position{}, txs); err != nil || open != (Position{}) {
+		t.Fatalf("맞는 기록은 통과: %+v %v", open, err)
+	}
+}
+
+func TestReplay_환율없는USD매수는_계산하지않는다(t *testing.T) {
+	// 1주@$277 환율 0 + 1주@$300 환율 1400, 원화 평단을 손으로 400,000 으로 맞춘 종목. 다시 쌓으면 210,000 이 되던 문제.
+	txs := []models.StockTransaction{leg(0, models.StockTxBuy, 1, 277, 0), leg(1, models.StockTxBuy, 1, 300, 1400)}
+	if _, _, err := Replay(true, Position{}, txs); !errors.Is(err, ErrLedgerFX) {
+		t.Fatalf("ErrLedgerFX 여야 한다: %v", err)
+	}
+	if _, err := CheckLedger(true, Position{2, 288.5, 400_000}, txs); !errors.Is(err, ErrLedgerFX) {
+		t.Fatalf("정정 전 검사에서 막혀야 한다: %v", err)
+	}
+	// 다시 쌓은 원화 평단이 달러 평단과 앞뒤가 안 맞으면 막는다
+	if _, _, err := Replay(true, Position{3, 100, 1}, []models.StockTransaction{leg(0, models.StockTxBuy, 1, 100, 1400)}); !errors.Is(err, ErrLedgerFX) {
+		t.Fatalf("역산 환율이 범위 밖이면 ErrLedgerFX: %v", err)
+	}
+}

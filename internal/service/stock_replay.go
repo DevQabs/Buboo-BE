@@ -12,6 +12,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/yourname/couple-app/internal/models"
@@ -25,10 +26,11 @@ type Position struct {
 var (
 	// ErrLedgerNegative: 정정대로면 어느 시점에 보유 수량이 0 아래로 내려간다.
 	ErrLedgerNegative = errors.New("이렇게 고치면 보유 수량이 0 아래로 내려가는 때가 생겨요")
-	// ErrLedgerMismatch: 지금 보유 정보와 기록이 맞지 않아 기록 이전 보유분을 구할 수 없다(기록 밖에서 수량을 고친 경우).
-	ErrLedgerMismatch = errors.New("지금 보유 수량과 매매 기록이 맞지 않아 자동으로 다시 계산할 수 없어요")
-	// ErrLedgerFX: USD 매도를 원화 손익으로 계산할 수 없다(환율 없음·원화 평단 손상).
-	ErrLedgerFX = errors.New("원화 손익을 계산할 수 없는 매도 기록이 있어요")
+	// ErrLedgerMismatch: 기록을 다시 쌓아도 지금 보유·저장된 손익이 나오지 않는다(손으로 평단·수량을
+	// 고쳤거나, 실제 반영 순서와 거래일 순서가 다른 경우). 이때 고치면 손대지 않은 매도 손익까지 바뀐다.
+	ErrLedgerMismatch = errors.New("기록과 현재 보유가 맞지 않아 정정할 수 없어요")
+	// ErrLedgerFX: USD 기록을 원화로 계산할 수 없다(환율 없는 옛 기록·원화 평단 손상).
+	ErrLedgerFX = errors.New("이 종목은 환율 없는 옛 기록이 있어 기록으로 다시 계산할 수 없어요. 종목 수정에서 수량·평단을 직접 맞춰 주세요")
 )
 
 // SortStockTxs 는 기록을 거래일 → 기록 시각 → id 순으로 정렬한다. Opening 과 Replay 는 같은 순서를 쓴다.
@@ -98,6 +100,9 @@ func Replay(usd bool, open Position, txs []models.StockTransaction) (Position, [
 	for i, t := range txs {
 		switch t.Type {
 		case models.StockTxBuy:
+			if usd && t.ExchangeRateAtTx <= 0 {
+				return Position{}, nil, fmt.Errorf("%w (%s 매수)", ErrLedgerFX, t.ExecutedAt.In(models.KST).Format("2006-01-02"))
+			}
 			if p.Qty < models.QtyEpsilon {
 				p = Position{}
 			}
@@ -118,7 +123,7 @@ func Replay(usd bool, open Position, txs []models.StockTransaction) (Position, [
 			t.AvgPriceAtTx = p.Avg
 			if usd {
 				if t.ExchangeRateAtTx <= 0 {
-					return Position{}, nil, fmt.Errorf("%w: %s 매도에 환율이 없어요. 그 매도의 환율을 먼저 넣어 주세요", ErrLedgerFX, day)
+					return Position{}, nil, fmt.Errorf("%w (%s 매도)", ErrLedgerFX, day)
 				}
 				if err := ValidateKRWCostBasis(p.Avg, p.AvgKRW); err != nil {
 					return Position{}, nil, fmt.Errorf("%w: %s 매도 — %v", ErrLedgerFX, day, err)
@@ -134,5 +139,34 @@ func Replay(usd bool, open Position, txs []models.StockTransaction) (Position, [
 		}
 		out[i] = t
 	}
+	if usd && p.Qty >= models.QtyEpsilon {
+		if err := ValidateKRWCostBasis(p.Avg, p.AvgKRW); err != nil {
+			return Position{}, nil, fmt.Errorf("%w: %v", ErrLedgerFX, err)
+		}
+	}
 	return p, out, nil
+}
+
+// CheckLedger 는 고치기 전 기록을 그대로 다시 쌓아 지금 상태 cur 와 저장된 매도 손익이 나오는지 본다.
+// 다르면(손으로 평단을 고침, 반영 순서와 거래일 순서가 다름 등) 정정이 손대지 않은 매도까지 바꾸므로
+// ErrLedgerMismatch 다. 맞으면 기록 이전 보유분을 돌려준다.
+func CheckLedger(usd bool, cur Position, txs []models.StockTransaction) (Position, error) {
+	open, err := Opening(usd, cur, txs)
+	if err != nil {
+		return Position{}, err
+	}
+	got, out, err := Replay(usd, open, txs)
+	if err != nil {
+		return Position{}, err
+	}
+	same := func(a, b float64) bool { return math.Abs(a-b) <= 1e-6*math.Max(1, math.Max(math.Abs(a), math.Abs(b))) }
+	if !same(got.Qty, cur.Qty) || (cur.Qty >= models.QtyEpsilon && (!same(got.Avg, cur.Avg) || math.Abs(got.AvgKRW-cur.AvgKRW) > 1)) {
+		return Position{}, ErrLedgerMismatch
+	}
+	for i := range out {
+		if out[i].Type == models.StockTxSell && math.Abs(out[i].RealizedPnL-txs[i].RealizedPnL) > 1 {
+			return Position{}, ErrLedgerMismatch
+		}
+	}
+	return open, nil
 }

@@ -167,3 +167,31 @@ func TestStockTxRoutes_다른그룹은404_보기권한은403(t *testing.T) {
 		}
 	}
 }
+
+func TestCorrectStockTx_기록과보유가맞지않으면409_처음등록만지우면409(t *testing.T) {
+	// 손으로 평단을 15 로 고친 종목: 기록(10@10 매수, 5주 매도)으로는 평단 10 이 나온다.
+	h, st := corrFixture(nil)
+	a := st.rows["stock-1"]
+	a.AveragePrice, a.AvgKRWPrice = 15, 19_500
+	st.rows["stock-1"] = a
+	w := corrCall(h.updateStockTx, http.MethodPut, "s1", `{"price":13}`)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "기록과 현재 보유가 맞지 않아") {
+		t.Fatalf("409 맞지 않음이어야 한다: %d %s", w.Code, w.Body)
+	}
+	if logByID(st, "s1").Price != 12 || st.rows["stock-1"].AveragePrice != 15 {
+		t.Fatal("거부했는데 바뀌었다")
+	}
+
+	st2 := &memStocks{
+		rows: map[string]models.StockAsset{"stock-1": {ID: "stock-1", Currency: "KRW", Quantity: 10, AveragePrice: 100, AvgKRWPrice: 100}},
+		logs: []models.StockTransaction{{ID: "i1", StockAssetID: "stock-1", Type: models.StockTxBuy, Quantity: 10, Price: 100, Currency: "KRW",
+			Source: models.StockTxSourceInitial, ExecutedAt: corrDay}},
+	}
+	h2 := &Handler{stockRepo: st2, stxRepo: &memSTx{stocks: st2}}
+	if w := corrCall(h2.deleteStockTx, http.MethodDelete, "i1", ``); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "종목 삭제") {
+		t.Fatalf("처음 등록만 지우면 409: %d %s", w.Code, w.Body)
+	}
+	if _, ok := st2.rows["stock-1"]; !ok {
+		t.Fatal("종목이 지워졌다")
+	}
+}
