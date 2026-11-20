@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -110,5 +111,36 @@ func TestSchedule_저장하면_알림을_다시_계산한다(t *testing.T) {
 	}
 	if rows := reminderRows(t, pool, s.ID); len(rows) != 0 {
 		t.Errorf("삭제한 일정의 알림이 남았다: %+v", rows)
+	}
+}
+
+// 시간 지정 일정: 알림은 실제 시각 기준, 00:30 KST(전날 UTC)도 KST 달로 묶인다
+func TestSchedule_시간_지정_알림과_달_경계(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	repo := NewPgScheduleRepository(pool)
+	couple := newScheduleCouple(t, pool)
+
+	y := time.Now().In(models.KST).Year() + 1
+	start, _, err := models.ScheduleTimes(false, fmt.Sprintf("%d-03-01", y), "00:30", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := repo.Create(ctx, &models.Schedule{CoupleID: couple, UserID: "u1", Title: "새벽",
+		StartDate: start, AllDay: false, Color: "indigo", Reminders: []string{"at", "h1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := reminderRows(t, pool, s.ID)
+	if len(rows) != 2 || rows[0].Kind != "at" || !rows[0].Due.Equal(time.Date(y, 3, 1, 0, 30, 0, 0, models.KST)) ||
+		rows[1].Kind != "h1" || !rows[1].Due.Equal(time.Date(y, 2, 28, 23, 30, 0, 0, models.KST)) {
+		t.Fatalf("시간 지정 알림: %+v", rows)
+	}
+	mar, err := repo.ListByMonth(ctx, couple, y, 3)
+	if err != nil || len(mar) != 1 {
+		t.Fatalf("3월 목록에 00:30 일정: %v %v", mar, err)
+	}
+	if feb, _ := repo.ListByMonth(ctx, couple, y, 2); len(feb) != 0 {
+		t.Errorf("2월 목록에 들면 안 된다: %v", feb)
 	}
 }

@@ -2470,6 +2470,9 @@ func (h *Handler) listSchedules(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+	for i := range schedules {
+		schedules[i].InKST()
+	}
 	respondJSON(w, http.StatusOK, schedules)
 }
 
@@ -2479,9 +2482,13 @@ func (h *Handler) createSchedule(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
-	startDate, err := time.Parse("2006-01-02", req.StartDate)
+	endDate := ""
+	if req.EndDate != nil {
+		endDate = *req.EndDate
+	}
+	startDate, end, err := models.ScheduleTimes(req.AllDay, req.StartDate, req.StartTime, endDate, req.EndTime)
 	if err != nil {
-		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid start_date: %w", err))
+		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid start/end: %w", err))
 		return
 	}
 	s := &models.Schedule{
@@ -2496,14 +2503,7 @@ func (h *Handler) createSchedule(w http.ResponseWriter, r *http.Request) {
 		DDayLabel:     req.DDayLabel,
 		Color:         req.Color,
 		Reminders:     req.Reminders,
-	}
-	if req.EndDate != nil {
-		endDate, err := time.Parse("2006-01-02", *req.EndDate)
-		if err != nil {
-			respondError(w, http.StatusBadRequest, fmt.Errorf("invalid end_date: %w", err))
-			return
-		}
-		s.EndDate = &endDate
+		EndDate:       end,
 	}
 	if !models.ValidReminders(s.AllDay, s.Reminders) {
 		respondError(w, http.StatusBadRequest, errBadReminders)
@@ -2517,6 +2517,7 @@ func (h *Handler) createSchedule(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+	created.InKST()
 	respondJSON(w, http.StatusCreated, created)
 }
 
@@ -2531,6 +2532,12 @@ func (h *Handler) updateSchedule(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, err)
 		return
+	}
+	// 날짜·시각은 기존 값(KST, 바꾸기 전 all_day 기준)에 요청 값을 덮어 한 번에 다시 계산한다
+	existing.InKST()
+	date, startTime, endDate, endTime := existing.StartDate.Format(time.DateOnly), existing.StartTime, "", existing.EndTime
+	if existing.EndDate != nil {
+		endDate = existing.EndDate.Format(time.DateOnly)
 	}
 	if req.Title != nil {
 		existing.Title = *req.Title
@@ -2553,22 +2560,17 @@ func (h *Handler) updateSchedule(w http.ResponseWriter, r *http.Request) {
 	if req.Color != nil {
 		existing.Color = *req.Color
 	}
-	if req.StartDate != nil {
-		d, err := time.Parse("2006-01-02", *req.StartDate)
-		if err != nil {
-			respondError(w, http.StatusBadRequest, fmt.Errorf("invalid start_date: %w", err))
-			return
+	for _, p := range []struct{ dst, src *string }{{&date, req.StartDate}, {&startTime, req.StartTime}, {&endDate, req.EndDate}, {&endTime, req.EndTime}} {
+		if p.src != nil {
+			*p.dst = *p.src
 		}
-		existing.StartDate = d
 	}
-	if req.EndDate != nil {
-		d, err := time.Parse("2006-01-02", *req.EndDate)
-		if err != nil {
-			respondError(w, http.StatusBadRequest, fmt.Errorf("invalid end_date: %w", err))
-			return
-		}
-		existing.EndDate = &d
+	start, end, err := models.ScheduleTimes(existing.AllDay, date, startTime, endDate, endTime)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid start/end: %w", err))
+		return
 	}
+	existing.StartDate, existing.EndDate = start, end
 	if req.Reminders != nil {
 		existing.Reminders = *req.Reminders
 	}
@@ -2581,6 +2583,7 @@ func (h *Handler) updateSchedule(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+	updated.InKST()
 	respondJSON(w, http.StatusOK, updated)
 }
 

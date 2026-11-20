@@ -62,7 +62,8 @@ func (r *PgScheduleRepository) ListByCouple(ctx context.Context, coupleID string
 }
 
 func (r *PgScheduleRepository) ListByMonth(ctx context.Context, coupleID string, year, month int) ([]models.Schedule, error) {
-	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+	// KST 달 경계: 하루 종일(UTC 자정 = KST 09시)도, 00:30 KST 같은 시간 지정 일정(전날 UTC)도 제 달에 든다
+	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, models.KST)
 	end := start.AddDate(0, 1, 0)
 	rows, err := r.db.Query(ctx,
 		`SELECT `+schCols+` FROM schedules

@@ -29,8 +29,10 @@ type Schedule struct {
 	IsDDay        bool       `json:"is_dday"`
 	IsAnniversary bool       `json:"is_anniversary"` // 지나도 D+N 으로 센다
 	DDayLabel     string     `json:"dday_label"`
-	Color         string     `json:"color"`     // "indigo"|"rose"|"emerald"|"amber"|"sky"
-	Reminders     []string   `json:"reminders"` // 알림 시점 코드(push 설계서 3절)
+	Color         string     `json:"color"`      // "indigo"|"rose"|"emerald"|"amber"|"sky"
+	Reminders     []string   `json:"reminders"`  // 알림 시점 코드(push 설계서 3절)
+	StartTime     string     `json:"start_time"` // 응답 전용 "HH:MM" KST, 하루 종일이면 ""
+	EndTime       string     `json:"end_time"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 }
@@ -44,7 +46,9 @@ type CreateScheduleRequest struct {
 	Title         string   `json:"title"`
 	Description   string   `json:"description"`
 	StartDate     string   `json:"start_date"` // YYYY-MM-DD
+	StartTime     string   `json:"start_time"` // HH:MM KST, all_day=false 면 필수
 	EndDate       *string  `json:"end_date,omitempty"`
+	EndTime       string   `json:"end_time"`
 	AllDay        bool     `json:"all_day"`
 	IsDDay        bool     `json:"is_dday"`
 	IsAnniversary bool     `json:"is_anniversary"`
@@ -57,7 +61,9 @@ type UpdateScheduleRequest struct {
 	Title         *string   `json:"title,omitempty"`
 	Description   *string   `json:"description,omitempty"`
 	StartDate     *string   `json:"start_date,omitempty"`
-	EndDate       *string   `json:"end_date,omitempty"`
+	StartTime     *string   `json:"start_time,omitempty"`
+	EndDate       *string   `json:"end_date,omitempty"` // "" 이면 끝 지움
+	EndTime       *string   `json:"end_time,omitempty"` // "" 이면 끝 시각 지움
 	AllDay        *bool     `json:"all_day,omitempty"`
 	IsDDay        *bool     `json:"is_dday,omitempty"`
 	IsAnniversary *bool     `json:"is_anniversary,omitempty"`
