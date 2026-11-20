@@ -67,6 +67,8 @@ type TransactionRepository interface {
 type StockTxChanges struct {
 	Update []models.StockTransaction // id 로 찾아 수량·단가·환율·날짜·평단·실현손익을 덮어쓴다
 	Delete []string
+	// DeleteTransaction 이 있으면 그 가계부 거래(transactions)도 같은 트랜잭션에서 지운다(저축 삭제).
+	DeleteTransaction string
 }
 
 // StockRepository abstracts all persistence operations for StockAsset.

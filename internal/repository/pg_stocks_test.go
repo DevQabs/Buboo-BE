@@ -257,3 +257,49 @@ func TestCreate_첫보유분매수기록을_같이남기고_로드맵적립에�
 		t.Fatalf("실패한 종목이 남았다: %d", len(list))
 	}
 }
+
+func TestRewrite_가계부거래삭제도_같은트랜잭션이다(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	repo := NewPgStockRepository(pool)
+	txr := NewPgTransactionRepository(pool)
+	couple := newCouple(t, pool)
+	a := newStock(t, repo, couple, 10)
+	saving, err := txr.Create(ctx, &models.Transaction{CoupleID: couple, UserID: "u1", Type: "saving", Amount: 1000,
+		Currency: "KRW", Category: "저축/투자", Date: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.Rewrite(ctx, a.ID, couple, func(s *models.StockAsset, _ []models.StockTransaction) (StockTxChanges, error) {
+		s.Quantity = 5
+		return StockTxChanges{DeleteTransaction: saving.ID}, errors.New("거부")
+	}); err == nil {
+		t.Fatal("오류여야 한다")
+	}
+	if _, err := txr.GetByID(ctx, saving.ID); err != nil {
+		t.Fatalf("거부했으면 거래가 남아야 한다: %v", err)
+	}
+	if _, err := repo.Rewrite(ctx, a.ID, couple, func(s *models.StockAsset, _ []models.StockTransaction) (StockTxChanges, error) {
+		s.Quantity = 5
+		return StockTxChanges{DeleteTransaction: saving.ID}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := txr.GetByID(ctx, saving.ID); err == nil {
+		t.Fatal("거래가 지워져야 한다")
+	}
+	if got, _ := repo.GetByID(ctx, a.ID); got.Quantity != 5 {
+		t.Fatalf("수량 5: %v", got.Quantity)
+	}
+	// 이미 지운 거래면 실패하고 잔고도 그대로
+	if _, err := repo.Rewrite(ctx, a.ID, couple, func(s *models.StockAsset, _ []models.StockTransaction) (StockTxChanges, error) {
+		s.Quantity = 1
+		return StockTxChanges{DeleteTransaction: saving.ID}, nil
+	}); err == nil {
+		t.Fatal("이미 지운 거래면 오류여야 한다")
+	}
+	if got, _ := repo.GetByID(ctx, a.ID); got.Quantity != 5 {
+		t.Fatalf("수량이 그대로 5 여야 한다: %v", got.Quantity)
+	}
+}

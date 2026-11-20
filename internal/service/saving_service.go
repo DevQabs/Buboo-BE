@@ -288,8 +288,8 @@ func (s *SavingService) applyOtherAsset(ctx context.Context, tx *models.Transact
 var ErrRevertAfterSell = errors.New("이 저축으로 산 뒤 매도한 기록이 있어 삭제할 수 없어요. 매매 기록을 먼저 정정해 주세요")
 
 // RevertSaving 은 저축 거래를 지우고 연결 자산을 저축 전으로 되돌린다. del 이 거래를 지운다.
-// 주식 저축은 종목을 잠근 채 되돌릴 수 있는지 먼저 보고, 거래를 지운 뒤 같은 DB 트랜잭션에서
-// 잔고를 되돌리고 저축이 남긴 매수 기록을 지운다. 되돌릴 수 없으면(ErrRevertAfterSell)
+// 주식 저축은 종목을 잠근 채 되돌릴 수 있는지 먼저 보고, 같은 DB 트랜잭션에서 거래를 지우고
+// 잔고를 되돌리고 저축이 남긴 매수 기록을 지운다(del 은 쓰지 않는다). 되돌릴 수 없으면(ErrRevertAfterSell)
 // 거래도 지우지 않는다. 거래를 먼저 지우므로 원복이 실패해도 다시 눌러 두 번 원복되는 일이 없다.
 // 연결 자산이 이미 지워졌으면 되돌릴 곳이 없으니 거래만 지운다.
 func (s *SavingService) RevertSaving(ctx context.Context, tx *models.Transaction, del func(context.Context) error) error {
@@ -320,9 +320,7 @@ func (s *SavingService) RevertSaving(ctx context.Context, tx *models.Transaction
 		if sellAfter(txs, tx, buy) {
 			return ch, ErrRevertAfterSell
 		}
-		if err := del(ctx); err != nil {
-			return ch, err
-		}
+		ch.DeleteTransaction = tx.ID
 		deleted = true
 		left := a.Quantity - qty
 		if left > 0 {

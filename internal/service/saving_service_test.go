@@ -135,8 +135,9 @@ func TestApplyStock_KRWStockNeedsNoRate(t *testing.T) {
 
 type memStocks struct {
 	repository.StockRepository
-	m   map[string]*models.StockAsset
-	txs []models.StockTransaction // Rewrite 가 넘기고 지우는 매매 기록
+	m         map[string]*models.StockAsset
+	txs       []models.StockTransaction // Rewrite 가 넘기고 지우는 매매 기록
+	deletedTx string                    // Rewrite 가 같은 트랜잭션에서 지운 가계부 거래
 }
 
 // Rewrite 는 PG 구현처럼 오류면 아무것도 바꾸지 않고, 성공하면 종목과 기록 변경을 함께 반영한다.
@@ -159,6 +160,7 @@ func (f *memStocks) Rewrite(_ context.Context, id, coupleID string, fn func(*mod
 	if err != nil {
 		return nil, err
 	}
+	f.deletedTx = ch.DeleteTransaction
 	for _, d := range ch.Delete {
 		f.txs = slices.DeleteFunc(f.txs, func(t models.StockTransaction) bool { return t.ID == d })
 	}
@@ -278,6 +280,9 @@ func TestRevertSaving_USD추가매수는_기록된환율로원화평단도되돌
 	}
 	if len(stocks.txs) != 1 || stocks.txs[0].ID != "t1" {
 		t.Fatalf("저축 매수 기록(t2)만 지워져야 한다: %+v", stocks.txs)
+	}
+	if stocks.deletedTx != "txn-1" {
+		t.Fatalf("가계부 거래도 같은 트랜잭션에서 지워야 한다: %q", stocks.deletedTx)
 	}
 }
 

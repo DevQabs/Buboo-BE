@@ -225,6 +225,15 @@ func (r *PgStockRepository) Rewrite(ctx context.Context, id, coupleID string, fn
 	if err != nil {
 		return nil, err
 	}
+	if ch.DeleteTransaction != "" {
+		tag, err := tx.Exec(ctx, `DELETE FROM transactions WHERE id = $1 AND couple_id = $2`, ch.DeleteTransaction, coupleID)
+		if err != nil {
+			return nil, err
+		}
+		if tag.RowsAffected() == 0 {
+			return nil, fmt.Errorf("transaction %s 가 이미 지워졌어요", ch.DeleteTransaction)
+		}
+	}
 	for _, d := range ch.Delete {
 		if _, err := tx.Exec(ctx, `DELETE FROM stock_transactions WHERE id = $1 AND couple_id = $2`, d, coupleID); err != nil {
 			return nil, err
