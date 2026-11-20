@@ -231,6 +231,11 @@ func (h *Handler) NewRouter() chi.Router {
 			r.Post("/refresh", h.refreshPrices)
 			r.Get("/tax", h.annualTax)                      // GET /api/stocks/tax?year=2026
 			r.Get("/transactions", h.listStockTransactions) // GET /api/stocks/transactions
+			r.Route("/transactions/{id}", func(r chi.Router) {
+				r.Use(h.owned("stock_transactions"))
+				r.Put("/", h.updateStockTx)    // 매매 기록 정정 → 종목 재계산
+				r.Delete("/", h.deleteStockTx) // 매매 기록 삭제 → 종목 재계산
+			})
 			// Must be registered BEFORE /{id} to avoid routing conflict
 			r.Patch("/reorder", h.reorderStocks) // PATCH /api/stocks/reorder
 			r.Route("/{id}", func(r chi.Router) {

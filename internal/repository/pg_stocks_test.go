@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/yourname/couple-app/internal/models"
 )

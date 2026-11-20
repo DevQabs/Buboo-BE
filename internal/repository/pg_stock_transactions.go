@@ -2,10 +2,12 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/yourname/couple-app/internal/models"
@@ -85,6 +87,15 @@ func (r *PgStockTransactionRepository) ListByCouple(ctx context.Context, coupleI
 	}
 	defer rows.Close()
 	return collectSTxRows(rows)
+}
+
+func (r *PgStockTransactionRepository) GetByID(ctx context.Context, coupleID, id string) (*models.StockTransaction, error) {
+	t, err := scanSTx(r.db.QueryRow(ctx,
+		`SELECT `+stxCols+` FROM stock_transactions WHERE id = $1 AND couple_id = $2`, id, coupleID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return t, err
 }
 
 func (r *PgStockTransactionRepository) ListBySymbol(ctx context.Context, coupleID, symbol string) ([]models.StockTransaction, error) {

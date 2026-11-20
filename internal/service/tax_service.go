@@ -153,7 +153,7 @@ var ErrTradeFX = errors.New("거래 환율을 정하지 못했어요")
 
 // USDKRWRates 는 매매 환율을 가져오는 곳이다. 운영은 PriceService 다.
 type USDKRWRates interface {
-	FetchUSDKRW(ctx context.Context) (float64, error)                // 지금 환율
+	FetchUSDKRW(ctx context.Context) (float64, error)                  // 지금 환율
 	FetchUSDKRWOn(ctx context.Context, day time.Time) (float64, error) // 그날(앞선 거래일) 종가
 }
 

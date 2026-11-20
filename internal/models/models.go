@@ -438,6 +438,14 @@ type SellRequest struct {
 	Memo     string  `json:"memo"`
 }
 
+// UpdateStockTxRequest 는 PUT /api/stocks/transactions/{id} 정정 요청이다. 보낸 칸만 바꾼다.
+type UpdateStockTxRequest struct {
+	Date         *string  `json:"date"` // YYYY-MM-DD(KST). 시각은 원래 기록 것을 둔다
+	Quantity     *float64 `json:"quantity"`
+	Price        *float64 `json:"price"`
+	ExchangeRate *float64 `json:"exchange_rate"` // USD 만. 빼고 날짜만 바꾸면 그날 종가를 다시 정한다
+}
+
 // TaxCheckResponse is returned by GET /api/stocks/{id}/tax-check.
 type TaxCheckResponse struct {
 	HasSellCurrentYear bool `json:"has_sell_current_year"`

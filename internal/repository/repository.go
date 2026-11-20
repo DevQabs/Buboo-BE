@@ -252,6 +252,9 @@ type StockTransactionRepository interface {
 	// ListBySymbol returns all transactions for a specific symbol.
 	ListBySymbol(ctx context.Context, coupleID, symbol string) ([]models.StockTransaction, error)
 
+	// GetByID returns one record of the couple, or ErrNotFound.
+	GetByID(ctx context.Context, coupleID, id string) (*models.StockTransaction, error)
+
 	// HasSellInYear returns true if there is at least one SELL transaction
 	// for the given symbol in the given calendar year.
 	HasSellInYear(ctx context.Context, coupleID, symbol string, year int) (bool, error)

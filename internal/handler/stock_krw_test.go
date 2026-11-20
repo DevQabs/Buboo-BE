@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -68,9 +69,58 @@ func (m *memStocks) Trade(_ context.Context, id, _ string, apply func(*models.St
 	return &a, nil
 }
 
+// Rewrite 는 PG 구현처럼 오류면 아무것도 바꾸지 않고, 성공하면 종목과 기록(logs) 변경을 함께 반영한다.
+func (m *memStocks) Rewrite(_ context.Context, id, _ string, fn func(*models.StockAsset, []models.StockTransaction) (repository.StockTxChanges, error)) (*models.StockAsset, error) {
+	var a *models.StockAsset
+	if r, ok := m.rows[id]; ok {
+		a = &r
+	}
+	var txs []models.StockTransaction
+	for _, t := range m.logs {
+		if t.StockAssetID == id {
+			txs = append(txs, t)
+		}
+	}
+	if a == nil && len(txs) == 0 {
+		return nil, repository.ErrNotFound
+	}
+	ch, err := fn(a, slices.Clone(txs))
+	if err != nil {
+		return nil, err
+	}
+	m.logs = slices.DeleteFunc(m.logs, func(t models.StockTransaction) bool { return slices.Contains(ch.Delete, t.ID) })
+	for _, u := range ch.Update {
+		for i := range m.logs {
+			if m.logs[i].ID == u.ID {
+				m.logs[i] = u
+			}
+		}
+	}
+	if a != nil {
+		if a.Quantity < models.QtyEpsilon {
+			a.Quantity = 0
+			delete(m.rows, id)
+		} else {
+			m.rows[id] = *a
+		}
+	}
+	return a, nil
+}
+
+// memSTx.GetByID 는 stocks.logs 를 본다(정정 테스트는 기록을 memStocks 한 곳에 둔다).
 type memSTx struct {
 	repository.StockTransactionRepository
-	rows []models.StockTransaction
+	rows   []models.StockTransaction
+	stocks *memStocks
+}
+
+func (m *memSTx) GetByID(_ context.Context, coupleID, id string) (*models.StockTransaction, error) {
+	for _, t := range m.stocks.logs {
+		if t.ID == id && t.CoupleID == coupleID {
+			return &t, nil
+		}
+	}
+	return nil, repository.ErrNotFound
 }
 
 func (m *memSTx) Create(_ context.Context, t *models.StockTransaction) (*models.StockTransaction, error) {
