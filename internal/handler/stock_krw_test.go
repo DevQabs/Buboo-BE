@@ -361,3 +361,16 @@ func TestSellStock_범위밖환율은_400(t *testing.T) {
 		t.Fatalf("환율 3000 매도는 400: %d %s", w.Code, w.Body)
 	}
 }
+
+func TestCreateStock_앞날매수일은400_UpdateStock_아주작은수량은400(t *testing.T) {
+	st := &memStocks{rows: map[string]models.StockAsset{"stock-9": {ID: "stock-9", Currency: "KRW", Quantity: 1, AveragePrice: 100, AvgKRWPrice: 100}}}
+	h := &Handler{stockRepo: st, stxRepo: &memSTx{}, rates: &fakeRates{live: 1400, on: 1400}}
+	future := time.Now().AddDate(0, 0, 3).Format(time.RFC3339)
+	w := stockCall(h.createStock, "", `{"user_id":"u1","symbol":"NU","exchange":"NYSE","name":"NU","quantity":1,"average_price":10,"currency":"USD","purchased_at":"`+future+`"}`)
+	if w.Code != http.StatusBadRequest || len(st.rows) != 1 {
+		t.Fatalf("앞날 매수일은 400, 저장 안 함: %d %s", w.Code, w.Body)
+	}
+	if w := stockCall(h.updateStock, "stock-9", `{"quantity":1e-12}`); w.Code != http.StatusBadRequest || st.rows["stock-9"].Quantity != 1 {
+		t.Fatalf("1e-12 주는 400: %d", w.Code)
+	}
+}

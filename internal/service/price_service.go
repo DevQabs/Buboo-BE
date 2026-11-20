@@ -217,9 +217,12 @@ func (p *PriceService) FetchUSDKRWOn(ctx context.Context, day time.Time) (float6
 	if rate <= 0 {
 		return 0, fmt.Errorf("no FX close on or before %s", key)
 	}
-	p.mu.Lock()
-	p.fxDays[key] = rate
-	p.mu.Unlock()
+	// 어제·오늘 일봉은 아직 움직이는 중일 수 있어 담아 두지 않는다.
+	if key < time.Now().In(models.KST).AddDate(0, 0, -1).Format(time.DateOnly) {
+		p.mu.Lock()
+		p.fxDays[key] = rate
+		p.mu.Unlock()
+	}
 	return rate, nil
 }
 

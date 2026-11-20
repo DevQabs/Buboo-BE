@@ -774,6 +774,10 @@ func (h *Handler) createStock(w http.ResponseWriter, r *http.Request) {
 	purchasedAt := now
 	if req.PurchasedAt != nil {
 		purchasedAt = *req.PurchasedAt
+		if purchasedAt.In(models.KST).Format(time.DateOnly) > now.In(models.KST).Format(time.DateOnly) {
+			respondError(w, http.StatusBadRequest, fmt.Errorf("매수일은 오늘 이후일 수 없어요"))
+			return
+		}
 	}
 	// 환율은 서버가 매수일 기준으로 정한다(화면 환율은 대체값일 수 있다).
 	fx, err := service.ResolveTradeFX(r.Context(), currency, purchasedAt, h.rates)
@@ -843,7 +847,7 @@ func (h *Handler) updateStock(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
 		return
 	}
-	if req.Quantity != nil && *req.Quantity <= 0 {
+	if req.Quantity != nil && *req.Quantity < models.QtyEpsilon {
 		respondError(w, http.StatusBadRequest, fmt.Errorf("quantity must be > 0"))
 		return
 	}
