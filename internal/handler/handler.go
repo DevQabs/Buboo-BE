@@ -793,7 +793,23 @@ func (h *Handler) createStock(w http.ResponseWriter, r *http.Request) {
 		PurchasedAt:  purchasedAt,
 	}
 
-	created, err := h.stockRepo.Create(r.Context(), asset)
+	// 첫 보유분도 매수 기록으로 남겨 매매 내역과 정정(재계산)에 들어가게 한다.
+	created, err := h.stockRepo.Create(r.Context(), asset, &models.StockTransaction{
+		CoupleID:         asset.CoupleID,
+		UserID:           asset.UserID,
+		Symbol:           asset.Symbol,
+		Exchange:         asset.Exchange,
+		Name:             asset.Name,
+		Type:             models.StockTxBuy,
+		Quantity:         asset.Quantity,
+		Price:            asset.AveragePrice,
+		Currency:         asset.Currency,
+		AvgPriceAtTx:     asset.AveragePrice,
+		ExchangeRateAtTx: fx,
+		Memo:             asset.Memo,
+		Source:           models.StockTxSourceInitial,
+		ExecutedAt:       purchasedAt,
+	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return

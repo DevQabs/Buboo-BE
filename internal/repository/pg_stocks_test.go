@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 	"testing"
 
 	"github.com/yourname/couple-app/internal/models"
@@ -14,7 +15,7 @@ func newStock(t *testing.T, repo *PgStockRepository, couple string, qty float64)
 	a, err := repo.Create(context.Background(), &models.StockAsset{
 		CoupleID: couple, UserID: "u1", Symbol: "005930", Exchange: "KRX",
 		Name: "삼성전자", Quantity: qty, AveragePrice: 100, AvgKRWPrice: 100, Currency: "KRW",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,5 +223,37 @@ func TestRewrite_기록변경과종목변경이_함께반영되고_오류면둘�
 		return StockTxChanges{}, nil
 	}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("다른 그룹은 ErrNotFound: %v", err)
+	}
+}
+
+func TestCreate_첫보유분매수기록을_같이남기고_로드맵적립에는세지않는다(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	repo := NewPgStockRepository(pool)
+	couple := newCouple(t, pool)
+	day := time.Date(2026, 10, 5, 0, 0, 0, 0, models.KST)
+	a, err := repo.Create(ctx, &models.StockAsset{CoupleID: couple, UserID: "u1", Symbol: "NU", Exchange: "NYSE",
+		Name: "NU", Quantity: 10, AveragePrice: 14, AvgKRWPrice: 19_600, Currency: "USD"},
+		&models.StockTransaction{CoupleID: couple, UserID: "u1", Symbol: "NU", Type: models.StockTxBuy, Quantity: 10, Price: 14,
+			Currency: "USD", ExchangeRateAtTx: 1400, Source: models.StockTxSourceInitial, ExecutedAt: day})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs, _ := NewPgStockTransactionRepository(pool).ListByCouple(ctx, couple)
+	if len(logs) != 1 || logs[0].StockAssetID != a.ID || logs[0].Source != models.StockTxSourceInitial {
+		t.Fatalf("첫 보유분 매수 기록 1건이 종목에 붙어야 한다: %+v", logs)
+	}
+	got, err := NewPgRoadmapRepository(pool).MonthlyContributions(ctx, couple, day.AddDate(0, -1, 0))
+	if err != nil || len(got) != 0 {
+		t.Fatalf("첫 보유분은 적립이 아니다: %v %v", got, err)
+	}
+
+	// 기록 저장이 실패하면 종목도 만들지 않는다.
+	if _, err := repo.Create(ctx, &models.StockAsset{CoupleID: couple, UserID: "u1", Symbol: "X", Exchange: "KRX", Name: "X",
+		Quantity: 1, AveragePrice: 1, Currency: "KRW"}, &models.StockTransaction{CoupleID: couple, Memo: "\xff"}); err == nil {
+		t.Fatal("기록 저장 실패가 오류로 나와야 한다")
+	}
+	if list, _ := repo.ListByCouple(ctx, couple); len(list) != 1 {
+		t.Fatalf("실패한 종목이 남았다: %d", len(list))
 	}
 }

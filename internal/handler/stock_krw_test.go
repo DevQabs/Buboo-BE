@@ -31,9 +31,13 @@ func (m *memStocks) GetByID(_ context.Context, id string) (*models.StockAsset, e
 	return &a, nil
 }
 
-func (m *memStocks) Create(_ context.Context, a *models.StockAsset) (*models.StockAsset, error) {
+func (m *memStocks) Create(_ context.Context, a *models.StockAsset, buy *models.StockTransaction) (*models.StockAsset, error) {
 	a.ID = "stock-1"
 	m.rows[a.ID] = *a
+	if buy != nil {
+		buy.StockAssetID = a.ID
+		m.logs = append(m.logs, *buy)
+	}
 	return a, nil
 }
 
@@ -274,6 +278,10 @@ func TestCreateStock_지난매수일이면_그날환율을쓴다(t *testing.T) {
 	}
 	if got := st.rows["stock-1"].AvgKRWPrice; got != 13_000 || len(rates.onDays) != 1 {
 		t.Fatalf("3월 9일 종가 1,300 으로 원화 평단 13,000 이어야 한다: %v %v", got, rates.onDays)
+	}
+	if len(st.logs) != 1 || st.logs[0].Source != models.StockTxSourceInitial || st.logs[0].ExchangeRateAtTx != 1300 ||
+		st.logs[0].Quantity != 10 || st.logs[0].ExecutedAt.Format(time.DateOnly) != "2026-03-09" {
+		t.Fatalf("첫 보유분 매수 기록(initial, 환율 1300, 매수일)이 남아야 한다: %+v", st.logs)
 	}
 }
 

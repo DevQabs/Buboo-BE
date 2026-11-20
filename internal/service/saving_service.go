@@ -213,34 +213,27 @@ func (s *SavingService) applyStock(ctx context.Context, tx *models.Transaction, 
 		Sector:       link.NewStockSector,
 		PurchasedAt:  tx.Date,
 	}
-	created, err := s.stockRepo.Create(ctx, newAsset)
-	if err != nil {
-		return fmt.Errorf("stock create: %w", err)
-	}
-
-	link.LinkAssetID = created.ID // backfill for tx record
-
-	// Step 3: append immutable stock transaction log (non-fatal)
-	stx := &models.StockTransaction{
+	// 매수 기록도 같은 DB 트랜잭션에 남긴다.
+	created, err := s.stockRepo.Create(ctx, newAsset, &models.StockTransaction{
 		CoupleID:         tx.CoupleID,
 		UserID:           tx.UserID,
-		StockAssetID:     created.ID,
-		Symbol:           created.Symbol,
-		Exchange:         created.Exchange,
-		Name:             created.Name,
+		Symbol:           newAsset.Symbol,
+		Exchange:         newAsset.Exchange,
+		Name:             newAsset.Name,
 		Type:             models.StockTxBuy,
 		Quantity:         link.NewStockQty,
 		Price:            link.NewStockPrice,
-		Currency:         created.Currency,
+		Currency:         newAsset.Currency,
 		AvgPriceAtTx:     link.NewStockPrice,
 		ExchangeRateAtTx: fx,
 		Source:           models.StockTxSourceSaving,
 		Memo:             tx.Memo,
 		ExecutedAt:       tx.Date,
+	})
+	if err != nil {
+		return fmt.Errorf("stock create: %w", err)
 	}
-	if _, err := s.stxRepo.Create(ctx, stx); err != nil {
-		fmt.Printf("warn: stx log failed for saving tx %s: %v\n", tx.ID, err)
-	}
+	link.LinkAssetID = created.ID // backfill for tx record
 	return nil
 }
 

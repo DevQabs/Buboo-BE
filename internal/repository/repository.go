@@ -80,8 +80,9 @@ type StockRepository interface {
 	// ListByUser returns stock assets owned by a specific user.
 	ListByUser(ctx context.Context, coupleID, userID string) ([]models.StockAsset, error)
 
-	// Create persists a new stock asset entry.
-	Create(ctx context.Context, asset *models.StockAsset) (*models.StockAsset, error)
+	// Create persists a new stock asset entry and, when buy is not nil, its buy
+	// record in the same DB transaction (buy.StockAssetID is filled in).
+	Create(ctx context.Context, asset *models.StockAsset, buy *models.StockTransaction) (*models.StockAsset, error)
 
 	// Update replaces an existing stock asset.
 	Update(ctx context.Context, asset *models.StockAsset) (*models.StockAsset, error)

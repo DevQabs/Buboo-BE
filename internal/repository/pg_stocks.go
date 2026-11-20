@@ -71,7 +71,8 @@ func (r *PgStockRepository) ListByUser(ctx context.Context, coupleID, userID str
 	return collectStockRows(rows)
 }
 
-func (r *PgStockRepository) Create(ctx context.Context, asset *models.StockAsset) (*models.StockAsset, error) {
+// Create 는 종목을 만들고, buy 가 있으면 그 매수 기록을 같은 DB 트랜잭션에 남긴다.
+func (r *PgStockRepository) Create(ctx context.Context, asset *models.StockAsset, buy *models.StockTransaction) (*models.StockAsset, error) {
 	asset.ID = "stock-" + uuid.NewString()
 	now := time.Now().UTC()
 	asset.CreatedAt = now
@@ -80,7 +81,12 @@ func (r *PgStockRepository) Create(ctx context.Context, asset *models.StockAsset
 		asset.PurchasedAt = now
 	}
 
-	_, err := r.db.Exec(ctx,
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx,
 		`INSERT INTO stock_assets
 		 (id, couple_id, user_id, symbol, exchange, name, name_en, quantity,
 		  average_price, currency, sector, memo, logo_url, purchased_at, created_at, updated_at, avg_krw_price,
@@ -97,6 +103,15 @@ func (r *PgStockRepository) Create(ctx context.Context, asset *models.StockAsset
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create stock: %w", err)
+	}
+	if buy != nil {
+		buy.StockAssetID = asset.ID
+		if err := insertSTx(ctx, tx, buy); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return asset, nil
 }

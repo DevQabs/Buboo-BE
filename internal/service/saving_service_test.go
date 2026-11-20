@@ -43,9 +43,9 @@ func (f *savingStocks) GetByID(_ context.Context, id string) (*models.StockAsset
 	return &a, nil
 }
 
-func (f *savingStocks) Create(_ context.Context, a *models.StockAsset) (*models.StockAsset, error) {
+func (f *savingStocks) Create(_ context.Context, a *models.StockAsset, buy *models.StockTransaction) (*models.StockAsset, error) {
 	a.ID = "stock-new"
-	f.created = a
+	f.created, f.traded = a, buy
 	return a, nil
 }
 
@@ -80,8 +80,8 @@ func TestApplyStock_NewUSDStockGetsAKRWBasis(t *testing.T) {
 	if st.created.AvgKRWPrice != 19_600 {
 		t.Errorf("신규 원화 평단: want 19600, got %v", st.created.AvgKRWPrice)
 	}
-	if sx.logged[0].ExchangeRateAtTx != 1400 {
-		t.Errorf("매매 로그 환율: want 1400, got %v", sx.logged[0].ExchangeRateAtTx)
+	if st.traded.ExchangeRateAtTx != 1400 || st.traded.Source != models.StockTxSourceSaving {
+		t.Errorf("매매 로그: want (1400, saving), got (%v, %v)", st.traded.ExchangeRateAtTx, st.traded.Source)
 	}
 }
 
@@ -128,8 +128,8 @@ func TestApplyStock_KRWStockNeedsNoRate(t *testing.T) {
 	if err := s.applyStock(context.Background(), savingTx(), link); err != nil {
 		t.Fatalf("KRW 저축 매수 실패: %v", err)
 	}
-	if st.created.AvgKRWPrice != 70_000 || sx.logged[0].ExchangeRateAtTx != 0 {
-		t.Errorf("KRW: want (70000, 0), got (%v, %v)", st.created.AvgKRWPrice, sx.logged[0].ExchangeRateAtTx)
+	if st.created.AvgKRWPrice != 70_000 || st.traded.ExchangeRateAtTx != 0 {
+		t.Errorf("KRW: want (70000, 0), got (%v, %v)", st.created.AvgKRWPrice, st.traded.ExchangeRateAtTx)
 	}
 }
 

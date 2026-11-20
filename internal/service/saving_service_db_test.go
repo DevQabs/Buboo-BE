@@ -35,7 +35,7 @@ func TestApplyStock_저축추가매수와직접매수가_동시에와도_수량�
 	stocks := repository.NewPgStockRepository(pool)
 	stxRepo := repository.NewPgStockTransactionRepository(pool)
 	a, err := stocks.Create(ctx, &models.StockAsset{CoupleID: couple, UserID: "u1", Symbol: "005930", Exchange: "KRX",
-		Name: "삼성전자", Quantity: 10, AveragePrice: 100, AvgKRWPrice: 100, Currency: "KRW"})
+		Name: "삼성전자", Quantity: 10, AveragePrice: 100, AvgKRWPrice: 100, Currency: "KRW"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

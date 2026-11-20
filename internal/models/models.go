@@ -391,6 +391,8 @@ const (
 const (
 	StockTxSourceTrade  = "trade"  // 매수·매도 화면
 	StockTxSourceSaving = "saving" // 저축 거래가 대신 산 매수. 로드맵 적립은 저축 거래 금액으로 센다
+	// 종목 추가로 등록한 첫 보유분. 앱 쓰기 전부터 갖고 있던 주식일 수 있어 로드맵 적립에 세지 않는다
+	StockTxSourceInitial = "initial"
 )
 
 // StockTransaction is an immutable record of a single buy or sell event.
