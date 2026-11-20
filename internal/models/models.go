@@ -268,6 +268,10 @@ type MonthlySummary struct {
 //  Stock Asset (주식 자산)
 // ─────────────────────────────────────────────
 
+// QtyEpsilon 아래 수량은 0 으로 본다. 0.1+0.2 를 사고 0.3 을 팔면 float 오차로
+// 5.55e-17 주가 남아 종목이 지워지지 않는다.
+const QtyEpsilon = 1e-9
+
 // StockAsset represents a single stock holding by one of the spouses.
 type StockAsset struct {
 	ID           string    `json:"id"`

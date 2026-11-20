@@ -151,3 +151,31 @@ func TestUpdate_소유자를저장한다(t *testing.T) {
 		t.Fatalf("수정한 소유자가 저장돼야 한다: %s", got.UserID)
 	}
 }
+
+func TestTrade_float오차로남은수량은_0으로보고종목을지운다(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	repo := NewPgStockRepository(pool)
+	couple := newCouple(t, pool)
+	a := newStock(t, repo, couple, 0.1)
+
+	if _, err := repo.Trade(ctx, a.ID, couple, func(s *models.StockAsset) (*models.StockTransaction, error) {
+		s.Quantity += 0.2
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Trade(ctx, a.ID, couple, func(s *models.StockAsset) (*models.StockTransaction, error) {
+		s.Quantity -= 0.3 // 0.1+0.2-0.3 = 5.55e-17
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Quantity != 0 {
+		t.Fatalf("남은 수량은 0 이어야 한다: %v", got.Quantity)
+	}
+	if _, err := repo.GetByID(ctx, a.ID); err == nil {
+		t.Fatal("종목이 지워져야 한다")
+	}
+}

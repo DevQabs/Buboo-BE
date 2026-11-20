@@ -150,7 +150,8 @@ func (r *PgStockRepository) Trade(ctx context.Context, id, coupleID string, appl
 	if err != nil {
 		return nil, err
 	}
-	if a.Quantity <= 0 {
+	if a.Quantity < models.QtyEpsilon {
+		a.Quantity = 0
 		_, err = tx.Exec(ctx, `DELETE FROM stock_assets WHERE id = $1`, id)
 	} else {
 		err = updateStockRow(ctx, tx, a)

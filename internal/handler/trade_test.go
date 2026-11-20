@@ -56,3 +56,14 @@ func TestSellStock_거래로처리한다(t *testing.T) {
 		t.Fatalf("지워진 종목 매도는 404: %d", w.Code)
 	}
 }
+
+func TestSellStock_0점1더하기0점2를사고0점3을팔면_종목이지워진다(t *testing.T) {
+	st := &memStocks{rows: map[string]models.StockAsset{
+		"stock-1": {ID: "stock-1", UserID: "u1", Symbol: "005930", Quantity: 0.1 + 0.2, AveragePrice: 100, AvgKRWPrice: 100, Currency: "KRW"},
+	}}
+	h := &Handler{stockRepo: st, stxRepo: &memSTx{}}
+	w := stockCall(h.sellStock, "stock-1", `{"quantity":0.3,"price":100}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"removed":true`) {
+		t.Fatalf("남은 5.55e-17 주는 0 으로 보고 지워야 한다: %d %s", w.Code, w.Body)
+	}
+}

@@ -51,7 +51,8 @@ func (m *memStocks) Trade(_ context.Context, id, _ string, apply func(*models.St
 	if err != nil {
 		return nil, err
 	}
-	if a.Quantity <= 0 {
+	if a.Quantity < models.QtyEpsilon {
+		a.Quantity = 0
 		delete(m.rows, id)
 	} else {
 		m.rows[id] = a

@@ -1042,7 +1042,7 @@ func (h *Handler) sellStock(w http.ResponseWriter, r *http.Request) {
 	var realizedPnL float64
 	var symbol string
 	updated, err := h.stockRepo.Trade(ctx, id, coupleID, func(asset *models.StockAsset) (*models.StockTransaction, error) {
-		if req.Quantity > asset.Quantity {
+		if req.Quantity > asset.Quantity+models.QtyEpsilon {
 			return nil, statusError{http.StatusBadRequest, fmt.Errorf("sell quantity (%.4f) exceeds holdings (%.4f)", req.Quantity, asset.Quantity)}
 		}
 
