@@ -179,3 +179,48 @@ func TestTrade_float오차로남은수량은_0으로보고종목을지운다(t *
 		t.Fatal("종목이 지워져야 한다")
 	}
 }
+
+func TestRewrite_기록변경과종목변경이_함께반영되고_오류면둘다안바뀐다(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	repo := NewPgStockRepository(pool)
+	stx := NewPgStockTransactionRepository(pool)
+	couple := newCouple(t, pool)
+	a := newStock(t, repo, couple, 10)
+	for range 2 {
+		if _, err := stx.Create(ctx, buyLog(couple, a)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := repo.Rewrite(ctx, a.ID, couple, func(s *models.StockAsset, txs []models.StockTransaction) (StockTxChanges, error) {
+		s.Quantity = 1
+		return StockTxChanges{Delete: []string{txs[0].ID}}, errors.New("거부")
+	})
+	if err == nil {
+		t.Fatal("fn 오류가 그대로 나와야 한다")
+	}
+	if logs, _ := stx.ListByCouple(ctx, couple); len(logs) != 2 {
+		t.Fatalf("거부했으면 기록이 그대로여야 한다: %d", len(logs))
+	}
+
+	got, err := repo.Rewrite(ctx, a.ID, couple, func(s *models.StockAsset, txs []models.StockTransaction) (StockTxChanges, error) {
+		s.Quantity = 9
+		u := txs[1]
+		u.Price, u.RealizedPnL = 123, 45
+		return StockTxChanges{Delete: []string{txs[0].ID}, Update: []models.StockTransaction{u}}, nil
+	})
+	if err != nil || got.Quantity != 9 {
+		t.Fatalf("수량 9 로 저장돼야 한다: %+v %v", got, err)
+	}
+	logs, _ := stx.ListByCouple(ctx, couple)
+	if len(logs) != 1 || logs[0].Price != 123 || logs[0].RealizedPnL != 45 {
+		t.Fatalf("한 건 지우고 한 건 고쳐야 한다: %+v", logs)
+	}
+	if _, err := repo.Rewrite(ctx, a.ID, "other-couple", func(*models.StockAsset, []models.StockTransaction) (StockTxChanges, error) {
+		t.Fatal("다른 그룹이면 fn 이 불리면 안 된다")
+		return StockTxChanges{}, nil
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("다른 그룹은 ErrNotFound: %v", err)
+	}
+}

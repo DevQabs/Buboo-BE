@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -134,7 +135,41 @@ func TestApplyStock_KRWStockNeedsNoRate(t *testing.T) {
 
 type memStocks struct {
 	repository.StockRepository
-	m map[string]*models.StockAsset
+	m   map[string]*models.StockAsset
+	txs []models.StockTransaction // Rewrite 가 넘기고 지우는 매매 기록
+}
+
+// Rewrite 는 PG 구현처럼 오류면 아무것도 바꾸지 않고, 성공하면 종목과 기록 변경을 함께 반영한다.
+func (f *memStocks) Rewrite(_ context.Context, id, coupleID string, fn func(*models.StockAsset, []models.StockTransaction) (repository.StockTxChanges, error)) (*models.StockAsset, error) {
+	var c *models.StockAsset
+	if a, ok := f.m[id]; ok && a.CoupleID == coupleID {
+		cp := *a
+		c = &cp
+	}
+	var txs []models.StockTransaction
+	for _, t := range f.txs {
+		if t.StockAssetID == id && t.CoupleID == coupleID {
+			txs = append(txs, t)
+		}
+	}
+	if c == nil && len(txs) == 0 {
+		return nil, repository.ErrNotFound
+	}
+	ch, err := fn(c, txs)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range ch.Delete {
+		f.txs = slices.DeleteFunc(f.txs, func(t models.StockTransaction) bool { return t.ID == d })
+	}
+	if c != nil {
+		if c.Quantity < models.QtyEpsilon {
+			delete(f.m, id)
+		} else {
+			f.m[id] = c
+		}
+	}
+	return c, nil
 }
 
 func (f *memStocks) Trade(_ context.Context, id, coupleID string, apply func(*models.StockAsset) (*models.StockTransaction, error)) (*models.StockAsset, error) {
@@ -189,6 +224,8 @@ func (f *memSTx) ListBySymbol(_ context.Context, coupleID, symbol string) ([]mod
 
 var savingDay = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 
+func noDel(context.Context) error { return nil }
+
 func linkedSavingTx(amount int64, link models.SavingLink) *models.Transaction {
 	return &models.Transaction{ID: "txn-1", CoupleID: "c1", Type: "saving", Amount: amount, Date: savingDay, SavingLink: &link}
 }
@@ -197,7 +234,7 @@ func TestRevertSaving_예금은_금액만큼뺀다(t *testing.T) {
 	assets := &memAssets{m: map[string]*models.OtherAsset{"a1": {ID: "a1", CoupleID: "c1", ValueKRW: 1_500_000}}}
 	s := NewSavingService(nil, &memStocks{}, nil, assets, nil)
 
-	err := s.RevertSaving(context.Background(), linkedSavingTx(500_000, models.SavingLink{Kind: models.SavingKindDeposit, LinkAssetID: "a1"}))
+	err := s.RevertSaving(context.Background(), linkedSavingTx(500_000, models.SavingLink{Kind: models.SavingKindDeposit, LinkAssetID: "a1"}), noDel)
 	if err != nil || assets.m["a1"].ValueKRW != 1_000_000 {
 		t.Fatalf("예금이 100만원으로 돌아가야 한다: %d, err=%v", assets.m["a1"].ValueKRW, err)
 	}
@@ -207,7 +244,7 @@ func TestRevertSaving_다른그룹자산은_건드리지않는다(t *testing.T) 
 	assets := &memAssets{m: map[string]*models.OtherAsset{"a1": {ID: "a1", CoupleID: "other", ValueKRW: 1_500_000}}}
 	s := NewSavingService(nil, &memStocks{}, nil, assets, nil)
 
-	err := s.RevertSaving(context.Background(), linkedSavingTx(500_000, models.SavingLink{Kind: models.SavingKindDeposit, LinkAssetID: "a1"}))
+	err := s.RevertSaving(context.Background(), linkedSavingTx(500_000, models.SavingLink{Kind: models.SavingKindDeposit, LinkAssetID: "a1"}), noDel)
 	if err != nil || assets.m["a1"].ValueKRW != 1_500_000 {
 		t.Fatalf("다른 그룹 자산이 바뀌었다: %d, err=%v", assets.m["a1"].ValueKRW, err)
 	}
@@ -218,34 +255,37 @@ func TestRevertSaving_추가매수는_수량과평단을되돌린다(t *testing.
 	stocks := &memStocks{m: map[string]*models.StockAsset{"s1": {ID: "s1", CoupleID: "c1", Quantity: 20, AveragePrice: 150, AvgKRWPrice: 150, Currency: "KRW"}}}
 	s := NewSavingService(nil, stocks, nil, &memAssets{}, nil)
 
-	err := s.RevertSaving(context.Background(), linkedSavingTx(2000, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "s1", AddStockQty: 10, AddStockPrice: 200}))
+	err := s.RevertSaving(context.Background(), linkedSavingTx(2000, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "s1", AddStockQty: 10, AddStockPrice: 200}), noDel)
 	got := stocks.m["s1"]
 	if err != nil || got.Quantity != 10 || got.AveragePrice != 100 || got.AvgKRWPrice != 100 {
 		t.Fatalf("10주@100 으로 돌아가야 한다: %+v, err=%v", got, err)
 	}
 }
 
-func TestRevertSaving_USD추가매수는_기록된환율로원화평단도되돌린다(t *testing.T) {
+func TestRevertSaving_USD추가매수는_기록된환율로원화평단도되돌리고_저축매수기록을지운다(t *testing.T) {
 	// 10주@$10(원화 13,000) 에 저축으로 10주@$20 을 환율 1,400 에 더해 20주@$15, 원화 20,500
-	stocks := &memStocks{m: map[string]*models.StockAsset{"s1": {ID: "s1", CoupleID: "c1", Symbol: "NU", Quantity: 20, AveragePrice: 15, AvgKRWPrice: 20_500, Currency: "USD"}}}
-	stx := &memSTx{rows: []models.StockTransaction{
-		{CoupleID: "c1", Symbol: "NU", StockAssetID: "s1", Type: models.StockTxBuy, Source: models.StockTxSourceTrade, Quantity: 10, Price: 20, ExchangeRateAtTx: 9999, ExecutedAt: savingDay},
-		{CoupleID: "c1", Symbol: "NU", StockAssetID: "s1", Type: models.StockTxBuy, Source: models.StockTxSourceSaving, Quantity: 10, Price: 20, ExchangeRateAtTx: 1400, ExecutedAt: savingDay},
-	}}
-	s := NewSavingService(nil, stocks, stx, &memAssets{}, nil)
+	stocks := &memStocks{m: map[string]*models.StockAsset{"s1": {ID: "s1", CoupleID: "c1", Symbol: "NU", Quantity: 20, AveragePrice: 15, AvgKRWPrice: 20_500, Currency: "USD"}},
+		txs: []models.StockTransaction{
+			{ID: "t1", CoupleID: "c1", Symbol: "NU", StockAssetID: "s1", Type: models.StockTxBuy, Source: models.StockTxSourceTrade, Quantity: 10, Price: 20, ExchangeRateAtTx: 9999, ExecutedAt: savingDay},
+			{ID: "t2", CoupleID: "c1", Symbol: "NU", StockAssetID: "s1", Type: models.StockTxBuy, Source: models.StockTxSourceSaving, Quantity: 10, Price: 20, ExchangeRateAtTx: 1400, ExecutedAt: savingDay},
+		}}
+	s := NewSavingService(nil, stocks, nil, &memAssets{}, nil)
 
-	err := s.RevertSaving(context.Background(), linkedSavingTx(280_000, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "s1", AddStockQty: 10, AddStockPrice: 20}))
+	err := s.RevertSaving(context.Background(), linkedSavingTx(280_000, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "s1", AddStockQty: 10, AddStockPrice: 20}), noDel)
 	got := stocks.m["s1"]
 	if err != nil || got.Quantity != 10 || got.AveragePrice != 10 || math.Abs(got.AvgKRWPrice-13_000) > 1e-6 {
 		t.Fatalf("10주@$10, 원화 13,000 으로 돌아가야 한다: %+v, err=%v", got, err)
+	}
+	if len(stocks.txs) != 1 || stocks.txs[0].ID != "t1" {
+		t.Fatalf("저축 매수 기록(t2)만 지워져야 한다: %+v", stocks.txs)
 	}
 }
 
 func TestRevertSaving_USD매수기록이없으면_원화평단은그대로(t *testing.T) {
 	stocks := &memStocks{m: map[string]*models.StockAsset{"s1": {ID: "s1", CoupleID: "c1", Symbol: "NU", Quantity: 20, AveragePrice: 15, AvgKRWPrice: 20_500, Currency: "USD"}}}
-	s := NewSavingService(nil, stocks, &memSTx{}, &memAssets{}, nil)
+	s := NewSavingService(nil, stocks, nil, &memAssets{}, nil)
 
-	err := s.RevertSaving(context.Background(), linkedSavingTx(280_000, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "s1", AddStockQty: 10, AddStockPrice: 20}))
+	err := s.RevertSaving(context.Background(), linkedSavingTx(280_000, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "s1", AddStockQty: 10, AddStockPrice: 20}), noDel)
 	got := stocks.m["s1"]
 	if err != nil || got.Quantity != 10 || got.AveragePrice != 10 || got.AvgKRWPrice != 20_500 {
 		t.Fatalf("수량·달러 평단만 되돌려야 한다: %+v, err=%v", got, err)
@@ -256,20 +296,24 @@ func TestRevertSaving_저축으로만든종목은_지운다(t *testing.T) {
 	stocks := &memStocks{m: map[string]*models.StockAsset{"s1": {ID: "s1", CoupleID: "c1", Quantity: 3, AveragePrice: 50, Currency: "USD"}}}
 	s := NewSavingService(nil, stocks, nil, &memAssets{}, nil)
 
-	err := s.RevertSaving(context.Background(), linkedSavingTx(200_000, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "s1", NewStockQty: 3, NewStockPrice: 50}))
+	err := s.RevertSaving(context.Background(), linkedSavingTx(200_000, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "s1", NewStockQty: 3, NewStockPrice: 50}), noDel)
 	if _, ok := stocks.m["s1"]; ok || err != nil {
 		t.Fatalf("종목이 지워져야 한다: err=%v", err)
 	}
 }
 
-func TestRevertSaving_자산을이미지웠으면_그냥넘어간다(t *testing.T) {
+func TestRevertSaving_자산을이미지웠으면_거래만지운다(t *testing.T) {
 	s := NewSavingService(nil, &memStocks{m: map[string]*models.StockAsset{}}, nil, &memAssets{m: map[string]*models.OtherAsset{}}, nil)
 	ctx := context.Background()
-	if err := s.RevertSaving(ctx, linkedSavingTx(1, models.SavingLink{Kind: models.SavingKindDeposit, LinkAssetID: "gone"})); err != nil {
-		t.Fatalf("지운 예금: %v", err)
-	}
-	if err := s.RevertSaving(ctx, linkedSavingTx(1, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "gone", AddStockQty: 1, AddStockPrice: 1})); err != nil {
-		t.Fatalf("지운 종목: %v", err)
+	for _, l := range []models.SavingLink{
+		{Kind: models.SavingKindDeposit, LinkAssetID: "gone"},
+		{Kind: models.SavingKindStock, LinkAssetID: "gone", AddStockQty: 1, AddStockPrice: 1},
+	} {
+		deleted := false
+		err := s.RevertSaving(ctx, linkedSavingTx(1, l), func(context.Context) error { deleted = true; return nil })
+		if err != nil || !deleted {
+			t.Fatalf("%s: 거래는 지워져야 한다: deleted=%v err=%v", l.Kind, deleted, err)
+		}
 	}
 }
 
@@ -283,31 +327,35 @@ func TestResizeSaving_예금은_차액만큼옮긴다(t *testing.T) {
 	}
 }
 
-func TestRevertSaving_저축뒤에팔았으면_음수평단대신기존평단을둔다(t *testing.T) {
-	// 10주@100 + 저축 10주@300 = 20주@200, 9주 매도 → 11주@200. 저축을 지우면 1주가 남고 계산상 평단은 -800.
-	for cur, krw := range map[string]float64{"KRW": 200, "USD": 260_000} {
-		stocks := &memStocks{m: map[string]*models.StockAsset{"s1": {ID: "s1", CoupleID: "c1", Symbol: "X", Quantity: 11, AveragePrice: 200, AvgKRWPrice: krw, Currency: cur}}}
-		stx := &memSTx{rows: []models.StockTransaction{{CoupleID: "c1", Symbol: "X", StockAssetID: "s1", Type: models.StockTxBuy,
-			Source: models.StockTxSourceSaving, Quantity: 10, Price: 300, ExchangeRateAtTx: 1300, ExecutedAt: savingDay}}}
-		s := NewSavingService(nil, stocks, stx, &memAssets{}, nil)
+func TestRevertSaving_저축뒤에판기록이있으면_409로막고아무것도안바꾼다(t *testing.T) {
+	// 10주@100, 저축 10주@200 → 20주@150, 5주 매도 → 15주@150. 빼서 되돌리면 5주@50 이 된다.
+	stocks := &memStocks{m: map[string]*models.StockAsset{"s1": {ID: "s1", CoupleID: "c1", Symbol: "X", Quantity: 15, AveragePrice: 150, AvgKRWPrice: 150, Currency: "KRW"}},
+		txs: []models.StockTransaction{
+			{ID: "b1", CoupleID: "c1", StockAssetID: "s1", Type: models.StockTxBuy, Source: models.StockTxSourceSaving, Quantity: 10, Price: 200, ExecutedAt: savingDay, CreatedAt: savingDay},
+			{ID: "s9", CoupleID: "c1", StockAssetID: "s1", Type: models.StockTxSell, Quantity: 5, Price: 180, ExecutedAt: savingDay.Add(time.Hour), CreatedAt: savingDay.Add(time.Hour)},
+		}}
+	s := NewSavingService(nil, stocks, nil, &memAssets{}, nil)
+	deleted := false
 
-		err := s.RevertSaving(context.Background(), linkedSavingTx(3_000, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "s1", AddStockQty: 10, AddStockPrice: 300}))
-		got := stocks.m["s1"]
-		if err != nil || got.Quantity != 1 || got.AveragePrice != 200 || got.AvgKRWPrice != krw {
-			t.Fatalf("%s: 1주에 기존 평단이 남아야 한다: %+v, err=%v", cur, got, err)
-		}
+	err := s.RevertSaving(context.Background(), linkedSavingTx(2000, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "s1", AddStockQty: 10, AddStockPrice: 200}),
+		func(context.Context) error { deleted = true; return nil })
+	if !errors.Is(err, ErrRevertAfterSell) {
+		t.Fatalf("ErrRevertAfterSell 이어야 한다: %v", err)
+	}
+	if got := stocks.m["s1"]; deleted || got.Quantity != 15 || got.AveragePrice != 150 || len(stocks.txs) != 2 {
+		t.Fatalf("거래·종목·기록이 그대로여야 한다: deleted=%v %+v txs=%d", deleted, got, len(stocks.txs))
 	}
 }
 
 func TestRevertSaving_날짜를고친저축도_매수환율을찾는다(t *testing.T) {
-	stocks := &memStocks{m: map[string]*models.StockAsset{"s1": {ID: "s1", CoupleID: "c1", Symbol: "NU", Quantity: 20, AveragePrice: 15, AvgKRWPrice: 20_500, Currency: "USD"}}}
-	stx := &memSTx{rows: []models.StockTransaction{{CoupleID: "c1", Symbol: "NU", StockAssetID: "s1", Type: models.StockTxBuy,
-		Source: models.StockTxSourceSaving, Quantity: 10, Price: 20, ExchangeRateAtTx: 1400, ExecutedAt: savingDay}}}
-	s := NewSavingService(nil, stocks, stx, &memAssets{}, nil)
+	stocks := &memStocks{m: map[string]*models.StockAsset{"s1": {ID: "s1", CoupleID: "c1", Symbol: "NU", Quantity: 20, AveragePrice: 15, AvgKRWPrice: 20_500, Currency: "USD"}},
+		txs: []models.StockTransaction{{ID: "b1", CoupleID: "c1", Symbol: "NU", StockAssetID: "s1", Type: models.StockTxBuy,
+			Source: models.StockTxSourceSaving, Quantity: 10, Price: 20, ExchangeRateAtTx: 1400, ExecutedAt: savingDay}}}
+	s := NewSavingService(nil, stocks, nil, &memAssets{}, nil)
 	tx := linkedSavingTx(280_000, models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "s1", AddStockQty: 10, AddStockPrice: 20})
 	tx.Date = savingDay.AddDate(0, 0, 5) // 거래 날짜만 나중에 고침
 
-	err := s.RevertSaving(context.Background(), tx)
+	err := s.RevertSaving(context.Background(), tx, noDel)
 	if got := stocks.m["s1"]; err != nil || math.Abs(got.AvgKRWPrice-13_000) > 1e-6 {
 		t.Fatalf("원화 평단이 13,000 으로 돌아가야 한다: %+v, err=%v", got, err)
 	}

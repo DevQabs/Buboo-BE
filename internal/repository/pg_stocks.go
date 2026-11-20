@@ -170,6 +170,77 @@ func (r *PgStockRepository) Trade(ctx context.Context, id, coupleID string, appl
 	return a, nil
 }
 
+// Rewrite 는 종목 행을 FOR UPDATE 로 잠그고 그 종목의 매매 기록을 시간순으로 읽어 fn 에
+// 넘긴다. fn 이 바꾼 종목(수량이 0 이면 행 삭제)과 기록 변경을 한 트랜잭션으로 저장한다.
+// 다 팔아 종목 행이 없으면 a 는 nil 이다. 그때는 잠글 행이 없으니 종목 id 로 advisory
+// lock 을 잡아 두 정정이 겹치지 않게 한다. 행도 기록도 없으면 ErrNotFound.
+func (r *PgStockRepository) Rewrite(ctx context.Context, id, coupleID string, fn func(*models.StockAsset, []models.StockTransaction) (StockTxChanges, error)) (*models.StockAsset, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, id); err != nil {
+		return nil, err
+	}
+	a, err := scanStock(tx.QueryRow(ctx,
+		`SELECT `+stockCols+` FROM stock_assets WHERE id = $1 AND couple_id = $2 FOR UPDATE`, id, coupleID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		a = nil
+	} else if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx,
+		`SELECT `+stxCols+` FROM stock_transactions
+		 WHERE stock_asset_id = $1 AND couple_id = $2 ORDER BY executed_at, created_at, id`, id, coupleID)
+	if err != nil {
+		return nil, err
+	}
+	txs, err := collectSTxRows(rows)
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if a == nil && len(txs) == 0 {
+		return nil, ErrNotFound
+	}
+
+	ch, err := fn(a, txs)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range ch.Delete {
+		if _, err := tx.Exec(ctx, `DELETE FROM stock_transactions WHERE id = $1 AND couple_id = $2`, d, coupleID); err != nil {
+			return nil, err
+		}
+	}
+	for _, t := range ch.Update {
+		if _, err := tx.Exec(ctx,
+			`UPDATE stock_transactions SET quantity=$3, price=$4, exchange_rate_at_tx=$5, executed_at=$6,
+			        avg_price_at_tx=$7, realized_pnl=$8
+			 WHERE id = $1 AND couple_id = $2`,
+			t.ID, coupleID, t.Quantity, t.Price, t.ExchangeRateAtTx, t.ExecutedAt, t.AvgPriceAtTx, t.RealizedPnL); err != nil {
+			return nil, err
+		}
+	}
+	if a != nil {
+		if a.Quantity < models.QtyEpsilon {
+			a.Quantity = 0
+			_, err = tx.Exec(ctx, `DELETE FROM stock_assets WHERE id = $1`, id)
+		} else {
+			err = updateStockRow(ctx, tx, a)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
 // Reorder rewrites sort_order for the given stock asset IDs, using their
 // position in the slice. The frontend groups holdings by symbol+exchange, so it
 // sends every row of a group consecutively — that keeps a group's rows adjacent

@@ -63,6 +63,12 @@ type TransactionRepository interface {
 //  Stock Asset Repository
 // ─────────────────────────────────────────────
 
+// StockTxChanges 는 Rewrite 가 같은 트랜잭션에서 매매 기록에 적용할 변경이다.
+type StockTxChanges struct {
+	Update []models.StockTransaction // id 로 찾아 수량·단가·환율·날짜·평단·실현손익을 덮어쓴다
+	Delete []string
+}
+
 // StockRepository abstracts all persistence operations for StockAsset.
 type StockRepository interface {
 	// GetByID returns a single stock asset by its ID.
@@ -87,6 +93,11 @@ type StockRepository interface {
 	// same DB transaction saves it — or deletes it when quantity reaches 0 — and
 	// appends the log apply returns (nil = no log). Any error rolls everything back.
 	Trade(ctx context.Context, id, coupleID string, apply func(a *models.StockAsset) (*models.StockTransaction, error)) (*models.StockAsset, error)
+
+	// Rewrite locks the asset and hands fn the asset (nil if it was already sold out)
+	// and all of its trade records oldest first. The asset change and the record
+	// changes fn returns are saved in the same DB transaction.
+	Rewrite(ctx context.Context, id, coupleID string, fn func(a *models.StockAsset, txs []models.StockTransaction) (StockTxChanges, error)) (*models.StockAsset, error)
 
 	// Delete removes a stock asset by ID.
 	Delete(ctx context.Context, id string) error

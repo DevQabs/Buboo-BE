@@ -542,13 +542,14 @@ func (h *Handler) deleteTransaction(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-	// 거래를 먼저 지운다. 원복이 실패해도 다시 눌러 두 번 원복되는 일이 없다.
-	if err := h.txRepo.Delete(ctx, id); err != nil {
-		respondError(w, http.StatusInternalServerError, err)
+	// 저축이면 되돌릴 수 있는지 먼저 보고, 거래를 지운 뒤 연결 자산을 되돌린다.
+	err = h.savingSvc.RevertSaving(ctx, tx, func(ctx context.Context) error { return h.txRepo.Delete(ctx, id) })
+	if errors.Is(err, service.ErrRevertAfterSell) {
+		respondError(w, http.StatusConflict, err)
 		return
 	}
-	if err := h.savingSvc.RevertSaving(ctx, tx); err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Errorf("거래는 지웠지만 연결 자산을 되돌리지 못했습니다: %w", err))
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

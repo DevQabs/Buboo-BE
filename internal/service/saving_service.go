@@ -289,53 +289,76 @@ func (s *SavingService) applyOtherAsset(ctx context.Context, tx *models.Transact
 	return nil
 }
 
-// RevertSaving 은 저축 거래를 지울 때 연결 자산을 저축 전으로 되돌린다.
-// 연결 자산이 이미 지워졌으면 되돌릴 곳이 없으니 넘어간다.
-func (s *SavingService) RevertSaving(ctx context.Context, tx *models.Transaction) error {
+// ErrRevertAfterSell 은 저축으로 산 뒤에 판 기록이 있어 저축을 지울 수 없다는 뜻이다.
+// 지금 잔고에서 저축 매수분만 빼면 평단이 틀어진다(10주@100 + 저축 10주@200 = 20주@150,
+// 5주 매도 → 15주@150, 저축을 빼면 5주@50). 핸들러는 409 로 돌려준다.
+var ErrRevertAfterSell = errors.New("이 저축으로 산 뒤 매도한 기록이 있어 삭제할 수 없어요. 매매 기록을 먼저 정정해 주세요")
+
+// RevertSaving 은 저축 거래를 지우고 연결 자산을 저축 전으로 되돌린다. del 이 거래를 지운다.
+// 주식 저축은 종목을 잠근 채 되돌릴 수 있는지 먼저 보고, 거래를 지운 뒤 같은 DB 트랜잭션에서
+// 잔고를 되돌리고 저축이 남긴 매수 기록을 지운다. 되돌릴 수 없으면(ErrRevertAfterSell)
+// 거래도 지우지 않는다. 거래를 먼저 지우므로 원복이 실패해도 다시 눌러 두 번 원복되는 일이 없다.
+// 연결 자산이 이미 지워졌으면 되돌릴 곳이 없으니 거래만 지운다.
+func (s *SavingService) RevertSaving(ctx context.Context, tx *models.Transaction, del func(context.Context) error) error {
 	l := tx.SavingLink
 	if tx.Type != "saving" || l == nil || l.LinkAssetID == "" {
-		return nil
+		return del(ctx)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if l.Kind != models.SavingKindStock {
+		if err := del(ctx); err != nil {
+			return err
+		}
 		return s.shiftOtherAsset(ctx, tx.CoupleID, l.LinkAssetID, -tx.Amount)
 	}
 	qty, price := l.AddStockQty, l.AddStockPrice
 	if qty == 0 { // 저축이 새로 만든 종목
 		qty, price = l.NewStockQty, l.NewStockPrice
 	}
-	_, err := s.stockRepo.Trade(ctx, l.LinkAssetID, tx.CoupleID, func(a *models.StockAsset) (*models.StockTransaction, error) {
+	deleted := false
+	_, err := s.stockRepo.Rewrite(ctx, l.LinkAssetID, tx.CoupleID, func(a *models.StockAsset, txs []models.StockTransaction) (repository.StockTxChanges, error) {
+		var ch repository.StockTxChanges
+		if a == nil { // 다 팔아 종목이 없다 — 되돌릴 곳이 없다
+			return ch, nil
+		}
+		buy := savingBuy(txs, tx, qty, price)
+		if sellAfter(txs, tx, buy) {
+			return ch, ErrRevertAfterSell
+		}
+		if err := del(ctx); err != nil {
+			return ch, err
+		}
+		deleted = true
 		left := a.Quantity - qty
 		if left > 0 {
-			if a.Currency == "USD" {
-				// 저축 매수 때 남긴 환율로 원화 평단을 되돌린다. 기록이 없으면(원화 평단 도입 전 저축) 그대로 둔다.
-				fx, err := s.savingBuyFX(ctx, tx, a, qty, price)
-				if err != nil {
-					return nil, err
-				}
-				if fx > 0 {
-					a.AvgKRWPrice = revertAvg(a.AvgKRWPrice, a.Quantity, price*fx, qty)
-				}
+			// 저축 매수 때 남긴 환율로 원화 평단을 되돌린다. 기록이 없으면(원화 평단 도입 전 저축) 그대로 둔다.
+			if a.Currency == "USD" && buy != nil && buy.ExchangeRateAtTx > 0 {
+				a.AvgKRWPrice = revertAvg(a.AvgKRWPrice, a.Quantity, price*buy.ExchangeRateAtTx, qty)
 			}
 			a.AveragePrice = revertAvg(a.AveragePrice, a.Quantity, price, qty)
 			if a.Currency != "USD" {
 				a.AvgKRWPrice = a.AveragePrice
 			}
 		}
-		a.Quantity = max(left, 0) // 0 이면 Trade 가 종목을 지운다
-		return nil, nil
+		a.Quantity = max(left, 0) // 0 이면 Rewrite 가 종목을 지운다
+		if buy != nil {
+			ch.Delete = []string{buy.ID}
+		}
+		return ch, nil
 	})
 	if errors.Is(err, repository.ErrNotFound) {
-		return nil
+		err = nil
+	}
+	if err == nil && !deleted {
+		return del(ctx)
 	}
 	return err
 }
 
 // revertAvg 는 평단 avg 로 qty 주를 가진 상태에서 단가 price 로 산 n 주를 뺀 평단이다.
-// 저축 뒤에 팔았으면 빼는 매수 금액이 남은 금액보다 커서 0 이하가 나온다. 그때는 되돌릴
-// 근거가 없으니 지금 평단을 둔다.
+// 계산이 0 이하로 나오면(기록 밖에서 수량·평단을 고친 경우) 되돌릴 근거가 없으니 지금 평단을 둔다.
 func revertAvg(avg, qty, price, n float64) float64 {
 	v := (avg*qty - price*n) / (qty - n)
 	if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
@@ -344,25 +367,36 @@ func revertAvg(avg, qty, price, n float64) float64 {
 	return v
 }
 
-// savingBuyFX 는 저축 거래가 USD 종목을 살 때 매매 기록에 남긴 환율이다. 없으면 0.
-// 저축 거래와 매매 기록은 id 로 이어지지 않아 종목·수량·단가로 찾는다. 거래 날짜는
+// savingBuy 는 저축 거래가 산 매수 기록이다. 없으면 nil.
+// 저축 거래와 매매 기록은 id 로 이어지지 않아 출처·수량·단가로 찾는다. 거래 날짜는
 // 나중에 고칠 수 있어 조건에 넣지 않고, 여러 건이면 거래 날짜에 가장 가까운 기록을 쓴다.
-func (s *SavingService) savingBuyFX(ctx context.Context, tx *models.Transaction, a *models.StockAsset, qty, price float64) (float64, error) {
-	rows, err := s.stxRepo.ListBySymbol(ctx, tx.CoupleID, a.Symbol)
-	if err != nil {
-		return 0, err
-	}
-	fx, best := 0.0, time.Duration(math.MaxInt64)
-	for _, r := range rows {
-		if r.Source != models.StockTxSourceSaving || r.StockAssetID != a.ID || r.Type != models.StockTxBuy ||
-			r.Quantity != qty || r.Price != price {
+func savingBuy(txs []models.StockTransaction, tx *models.Transaction, qty, price float64) *models.StockTransaction {
+	var found *models.StockTransaction
+	best := time.Duration(math.MaxInt64)
+	for i, r := range txs {
+		if r.Source != models.StockTxSourceSaving || r.Type != models.StockTxBuy || r.Quantity != qty || r.Price != price {
 			continue
 		}
 		if d := r.ExecutedAt.Sub(tx.Date).Abs(); d < best {
-			fx, best = r.ExchangeRateAtTx, d
+			found, best = &txs[i], d
 		}
 	}
-	return fx, nil
+	return found
+}
+
+// sellAfter 는 저축 매수 뒤에 매도가 있었는지 본다. 기록 순서(created_at)든 거래일(executed_at)이든
+// 뒤에 있으면 뒤로 본다. 매수 기록이 없으면 저축 거래의 날짜·생성 시각을 기준으로 쓴다.
+func sellAfter(txs []models.StockTransaction, tx *models.Transaction, buy *models.StockTransaction) bool {
+	at, created := tx.Date, tx.CreatedAt
+	if buy != nil {
+		at, created = buy.ExecutedAt, buy.CreatedAt
+	}
+	for _, r := range txs {
+		if r.Type == models.StockTxSell && (r.ExecutedAt.After(at) || r.CreatedAt.After(created)) {
+			return true
+		}
+	}
+	return false
 }
 
 // ResizeSaving 은 저축 금액을 고칠 때 연결된 예금·일반 자산을 차액만큼 옮긴다.
