@@ -809,26 +809,28 @@ func (h *Handler) getStock(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, asset)
 }
 
+// updateStock — PUT /api/stocks/{id}. 보낸 칸만 바꾼다(빠진 칸은 그대로).
+// 종목 행을 잠근 채(Trade) 고쳐, 화면을 연 뒤 들어온 매수·매도를 옛 수량으로 덮어쓰지 않는다.
 func (h *Handler) updateStock(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id := chi.URLParam(r, "id")
-
-	// Load existing asset first
-	existing, err := h.stockRepo.GetByID(r.Context(), id)
-	if err != nil {
-		respondError(w, http.StatusNotFound, err)
-		return
-	}
 
 	var req models.UpdateStockRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
 		return
 	}
-
-	// Partial update — only non-nil fields are applied
+	if req.Quantity != nil && *req.Quantity <= 0 {
+		respondError(w, http.StatusBadRequest, fmt.Errorf("quantity must be > 0"))
+		return
+	}
+	if req.AveragePrice != nil && *req.AveragePrice <= 0 {
+		respondError(w, http.StatusBadRequest, fmt.Errorf("average_price must be > 0"))
+		return
+	}
 	if req.UserID != nil {
 		// 소유자는 호출자 그룹 사람으로만 바꾼다.
-		users, err := h.userRepo.ListUsers(r.Context(), auth.CoupleIDFromCtx(r.Context()))
+		users, err := h.userRepo.ListUsers(ctx, auth.CoupleIDFromCtx(ctx))
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err)
 			return
@@ -837,46 +839,41 @@ func (h *Handler) updateStock(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, fmt.Errorf("user_id 가 이 그룹 사람이 아닙니다"))
 			return
 		}
-		existing.UserID = *req.UserID
-	}
-	if req.Name != nil {
-		existing.Name = *req.Name
-	}
-	if req.Quantity != nil {
-		if *req.Quantity <= 0 {
-			respondError(w, http.StatusBadRequest, fmt.Errorf("quantity must be > 0"))
-			return
-		}
-		existing.Quantity = *req.Quantity
-	}
-	if req.AveragePrice != nil {
-		if *req.AveragePrice <= 0 {
-			respondError(w, http.StatusBadRequest, fmt.Errorf("average_price must be > 0"))
-			return
-		}
-		existing.AveragePrice = *req.AveragePrice
-		if !strings.EqualFold(existing.Currency, "USD") {
-			existing.AvgKRWPrice = existing.AveragePrice // 원화 종목은 평단이 곧 원화 평단
-		}
-	}
-	if req.Sector != nil {
-		existing.Sector = *req.Sector
-	}
-	if req.Memo != nil {
-		existing.Memo = *req.Memo
-	}
-	if req.AvgKRWPrice != nil {
-		// USD 종목 전용. 달러 평단과 앞뒤가 맞지 않는 값은 받지 않는다.
-		if err := service.ValidateKRWCostBasis(existing.AveragePrice, *req.AvgKRWPrice); err != nil {
-			respondError(w, http.StatusBadRequest, err)
-			return
-		}
-		existing.AvgKRWPrice = *req.AvgKRWPrice
 	}
 
-	updated, err := h.stockRepo.Update(r.Context(), existing)
+	updated, err := h.stockRepo.Trade(ctx, id, auth.CoupleIDFromCtx(ctx), func(existing *models.StockAsset) (*models.StockTransaction, error) {
+		if req.UserID != nil {
+			existing.UserID = *req.UserID
+		}
+		if req.Name != nil {
+			existing.Name = *req.Name
+		}
+		if req.Quantity != nil {
+			existing.Quantity = *req.Quantity
+		}
+		if req.AveragePrice != nil {
+			existing.AveragePrice = *req.AveragePrice
+			if !strings.EqualFold(existing.Currency, "USD") {
+				existing.AvgKRWPrice = existing.AveragePrice // 원화 종목은 평단이 곧 원화 평단
+			}
+		}
+		if req.Sector != nil {
+			existing.Sector = *req.Sector
+		}
+		if req.Memo != nil {
+			existing.Memo = *req.Memo
+		}
+		if req.AvgKRWPrice != nil {
+			// USD 종목 전용. 달러 평단과 앞뒤가 맞지 않는 값은 받지 않는다.
+			if err := service.ValidateKRWCostBasis(existing.AveragePrice, *req.AvgKRWPrice); err != nil {
+				return nil, statusError{http.StatusBadRequest, err}
+			}
+			existing.AvgKRWPrice = *req.AvgKRWPrice
+		}
+		return nil, nil
+	})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
+		respondTradeError(w, err)
 		return
 	}
 	respondJSON(w, http.StatusOK, updated)

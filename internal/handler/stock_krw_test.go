@@ -216,3 +216,24 @@ func TestUpdateStock_원화종목평단을고치면_원화평단도같이바뀐�
 		t.Errorf("원화 종목 원화 평단: want 70000, got %v", got)
 	}
 }
+
+func TestUpdateStock_보내지않은수량은_그사이매수를덮어쓰지않는다(t *testing.T) {
+	st := &memStocks{rows: map[string]models.StockAsset{"stock-1": {ID: "stock-1", Currency: "KRW", Quantity: 10, AveragePrice: 100, AvgKRWPrice: 100}}}
+	h := &Handler{stockRepo: st, stxRepo: &memSTx{}}
+
+	// 수정 화면을 연 뒤 다른 사람이 5주를 샀다.
+	a := st.rows["stock-1"]
+	a.Quantity, a.AveragePrice, a.AvgKRWPrice = 15, 120, 120
+	st.rows["stock-1"] = a
+
+	if w := stockCall(h.updateStock, "stock-1", `{"name":"삼성전자","memo":"장기"}`); w.Code != http.StatusOK {
+		t.Fatalf("수정 실패: %d %s", w.Code, w.Body)
+	}
+	got := st.rows["stock-1"]
+	if got.Quantity != 15 || got.AveragePrice != 120 || got.Name != "삼성전자" || got.Memo != "장기" {
+		t.Fatalf("이름·메모만 바뀌고 수량·평단은 15주@120 이어야 한다: %+v", got)
+	}
+	if w := stockCall(h.updateStock, "missing", `{"name":"x"}`); w.Code != http.StatusNotFound {
+		t.Fatalf("없는 종목은 404: %d", w.Code)
+	}
+}
