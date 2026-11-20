@@ -70,7 +70,7 @@ func savingTx() *models.Transaction {
 
 func TestApplyStock_NewUSDStockGetsAKRWBasis(t *testing.T) {
 	st, sx := &savingStocks{}, &savingSTx{}
-	s := &SavingService{stockRepo: st, stxRepo: sx, usdKRW: fixedFX(1400, nil)}
+	s := &SavingService{stockRepo: st, stxRepo: sx, rates: &fakeRates{live: 9999, on: 1400}}
 	link := &models.SavingLink{Kind: models.SavingKindStock, NewStockSymbol: "nu", NewStockExchange: "nyse",
 		NewStockName: "NU", NewStockQty: 10, NewStockPrice: 14, NewStockCurrency: "USD"}
 
@@ -89,7 +89,7 @@ func TestApplyStock_AddToExistingRecoversAZeroBasis(t *testing.T) {
 	st := &savingStocks{byID: map[string]models.StockAsset{
 		"stock-1": {ID: "stock-1", CoupleID: "c1", Currency: "USD", Quantity: 203, AveragePrice: 13.9465, AvgKRWPrice: 0},
 	}}
-	s := &SavingService{stockRepo: st, stxRepo: &savingSTx{}, usdKRW: fixedFX(1418.12, nil)}
+	s := &SavingService{stockRepo: st, stxRepo: &savingSTx{}, rates: &fakeRates{live: 9999, on: 1418.12}}
 	link := &models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "stock-1", AddStockQty: 108, AddStockPrice: 13.94}
 
 	if err := s.applyStock(context.Background(), savingTx(), link); err != nil {
@@ -107,12 +107,12 @@ func TestApplyStock_FailsWithoutARateAndWritesNothing(t *testing.T) {
 	st := &savingStocks{byID: map[string]models.StockAsset{
 		"stock-1": {ID: "stock-1", CoupleID: "c1", Currency: "USD", Quantity: 10, AveragePrice: 14, AvgKRWPrice: 19_600},
 	}}
-	s := &SavingService{stockRepo: st, stxRepo: &savingSTx{}, usdKRW: fixedFX(0, errors.New("timeout"))}
+	s := &SavingService{stockRepo: st, stxRepo: &savingSTx{}, rates: &fakeRates{err: errors.New("timeout")}}
 	link := &models.SavingLink{Kind: models.SavingKindStock, LinkAssetID: "stock-1", AddStockQty: 1, AddStockPrice: 14}
 
 	err := s.applyStock(context.Background(), savingTx(), link)
-	if !errors.Is(err, ErrBuyFX) {
-		t.Errorf("환율 없음은 ErrBuyFX 여야 한다: got %v", err)
+	if !errors.Is(err, ErrTradeFX) {
+		t.Errorf("환율 없음은 ErrTradeFX 여야 한다: got %v", err)
 	}
 	if st.updated != nil {
 		t.Errorf("환율 없이 종목을 갱신했다")
@@ -121,7 +121,7 @@ func TestApplyStock_FailsWithoutARateAndWritesNothing(t *testing.T) {
 
 func TestApplyStock_KRWStockNeedsNoRate(t *testing.T) {
 	st, sx := &savingStocks{}, &savingSTx{}
-	s := &SavingService{stockRepo: st, stxRepo: sx, usdKRW: fixedFX(0, errors.New("호출되면 안 된다"))}
+	s := &SavingService{stockRepo: st, stxRepo: sx, rates: &fakeRates{err: errors.New("호출되면 안 된다")}}
 	link := &models.SavingLink{Kind: models.SavingKindStock, NewStockSymbol: "005930", NewStockExchange: "KRX",
 		NewStockName: "삼성전자", NewStockQty: 10, NewStockPrice: 70_000, NewStockCurrency: "KRW"}
 

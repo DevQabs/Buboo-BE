@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/yourname/couple-app/internal/models"
@@ -73,6 +74,19 @@ func (m *memSTx) Create(_ context.Context, t *models.StockTransaction) (*models.
 	return t, nil
 }
 
+// fakeRates 는 지금 환율(live)과 날짜별 종가(on)를 돌려준다.
+type fakeRates struct {
+	live, on float64
+	err      error
+	onDays   []time.Time
+}
+
+func (f *fakeRates) FetchUSDKRW(context.Context) (float64, error) { return f.live, f.err }
+func (f *fakeRates) FetchUSDKRWOn(_ context.Context, d time.Time) (float64, error) {
+	f.onDays = append(f.onDays, d)
+	return f.on, f.err
+}
+
 func stockCall(fn http.HandlerFunc, id, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	rctx := chi.NewRouteContext()
@@ -86,11 +100,12 @@ func stockCall(fn http.HandlerFunc, id, body string) *httptest.ResponseRecorder 
 func TestStockKRWBasis_CreateBuySell(t *testing.T) {
 	st := &memStocks{rows: map[string]models.StockAsset{}}
 	sx := &memSTx{}
-	h := &Handler{stockRepo: st, stxRepo: sx}
+	rates := &fakeRates{live: 1400}
+	h := &Handler{stockRepo: st, stxRepo: sx, rates: rates}
 
-	// 생성: 10주 × $14 × 1,400 → 원화 평단 19,600
+	// 생성: 10주 × $14 × 1,400 → 원화 평단 19,600. 화면이 보낸 환율(1380)은 쓰지 않는다.
 	w := stockCall(h.createStock, "", `{"user_id":"u1","symbol":"nu","exchange":"NYSE","name":"NU",
-		"quantity":10,"average_price":14,"currency":"USD","exchange_rate":1400}`)
+		"quantity":10,"average_price":14,"currency":"USD","exchange_rate":1380}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("생성 실패: %d %s", w.Code, w.Body)
 	}
@@ -99,7 +114,8 @@ func TestStockKRWBasis_CreateBuySell(t *testing.T) {
 	}
 
 	// 매수: 10주 × $16 × 1,500 → (196,000 + 240,000) / 20 = 21,800
-	w = stockCall(h.buyStock, "stock-1", `{"quantity":10,"price":16,"exchange_rate":1500}`)
+	rates.live = 1500
+	w = stockCall(h.buyStock, "stock-1", `{"quantity":10,"price":16,"exchange_rate":1380}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("매수 실패: %d %s", w.Code, w.Body)
 	}
@@ -110,19 +126,27 @@ func TestStockKRWBasis_CreateBuySell(t *testing.T) {
 		t.Errorf("매수 로그 환율: want 1500, got %v", got)
 	}
 
-	// 매도: 원화 평단이 있으니 422 가 아니어야 한다.
-	w = stockCall(h.sellStock, "stock-1", `{"quantity":5,"price":20,"exchange_rate":1450}`)
+	if !strings.Contains(w.Body.String(), `"exchange_rate":1500`) {
+		t.Errorf("응답에 쓴 환율이 있어야 한다: %s", w.Body)
+	}
+
+	// 매도: 원화 평단이 있으니 422 가 아니어야 한다. 손익 = (20×1,450 − 21,800) × 5 = 36,000
+	rates.live = 1450
+	w = stockCall(h.sellStock, "stock-1", `{"quantity":5,"price":20,"exchange_rate":1380}`)
 	if w.Code != http.StatusOK {
-		t.Errorf("매도 실패: %d %s", w.Code, w.Body)
+		t.Fatalf("매도 실패: %d %s", w.Code, w.Body)
+	}
+	if l := st.logs[len(st.logs)-1]; l.ExchangeRateAtTx != 1450 || l.RealizedPnL != 36_000 {
+		t.Errorf("매도 기록: want (1450, 36000), got (%v, %v)", l.ExchangeRateAtTx, l.RealizedPnL)
 	}
 }
 
 func TestCreateStock_RejectsAnImplausibleRate(t *testing.T) {
 	st := &memStocks{rows: map[string]models.StockAsset{}}
-	h := &Handler{stockRepo: st, stxRepo: &memSTx{}}
+	h := &Handler{stockRepo: st, stxRepo: &memSTx{}, rates: &fakeRates{live: 1}}
 
 	w := stockCall(h.createStock, "", `{"user_id":"u1","symbol":"NU","exchange":"NYSE","name":"NU",
-		"quantity":10,"average_price":14,"currency":"USD","exchange_rate":1}`)
+		"quantity":10,"average_price":14,"currency":"USD"}`)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("환율 1 은 400 이어야 한다: got %d", w.Code)
 	}
@@ -149,9 +173,9 @@ func TestBuyStock_RecoversAStuckZeroBasis(t *testing.T) {
 	st := &memStocks{rows: map[string]models.StockAsset{
 		"stock-1": {ID: "stock-1", Currency: "USD", Quantity: 203, AveragePrice: 13.9465, AvgKRWPrice: 0},
 	}}
-	h := &Handler{stockRepo: st, stxRepo: &memSTx{}}
+	h := &Handler{stockRepo: st, stxRepo: &memSTx{}, rates: &fakeRates{live: 1418.12}}
 
-	w := stockCall(h.buyStock, "stock-1", `{"quantity":108,"price":13.94,"exchange_rate":1418.12}`)
+	w := stockCall(h.buyStock, "stock-1", `{"quantity":108,"price":13.94}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("매수 실패: %d %s", w.Code, w.Body)
 	}
@@ -235,5 +259,47 @@ func TestUpdateStock_보내지않은수량은_그사이매수를덮어쓰지않�
 	}
 	if w := stockCall(h.updateStock, "missing", `{"name":"x"}`); w.Code != http.StatusNotFound {
 		t.Fatalf("없는 종목은 404: %d", w.Code)
+	}
+}
+
+func TestCreateStock_지난매수일이면_그날환율을쓴다(t *testing.T) {
+	st := &memStocks{rows: map[string]models.StockAsset{}}
+	rates := &fakeRates{live: 1500, on: 1300}
+	h := &Handler{stockRepo: st, stxRepo: &memSTx{}, rates: rates}
+
+	w := stockCall(h.createStock, "", `{"user_id":"u1","symbol":"NU","exchange":"NYSE","name":"NU",
+		"quantity":10,"average_price":10,"currency":"USD","purchased_at":"2026-03-09T00:00:00+09:00"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("생성 실패: %d %s", w.Code, w.Body)
+	}
+	if got := st.rows["stock-1"].AvgKRWPrice; got != 13_000 || len(rates.onDays) != 1 {
+		t.Fatalf("3월 9일 종가 1,300 으로 원화 평단 13,000 이어야 한다: %v %v", got, rates.onDays)
+	}
+}
+
+func TestTrade_환율을못가져오면_대체환율없이400(t *testing.T) {
+	st := &memStocks{rows: map[string]models.StockAsset{
+		"stock-1": {ID: "stock-1", Currency: "USD", Quantity: 10, AveragePrice: 14, AvgKRWPrice: 19_600},
+	}}
+	h := &Handler{stockRepo: st, stxRepo: &memSTx{}, rates: &fakeRates{err: errors.New("yahoo down")}}
+
+	for name, fn := range map[string]http.HandlerFunc{"매수": h.buyStock, "매도": h.sellStock} {
+		w := stockCall(fn, "stock-1", `{"quantity":1,"price":15,"exchange_rate":1380}`)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "다시 시도") {
+			t.Errorf("%s: 400 다시 시도여야 한다: %d %s", name, w.Code, w.Body)
+		}
+	}
+	if len(st.logs) != 0 || st.rows["stock-1"].Quantity != 10 {
+		t.Fatalf("아무것도 바뀌면 안 된다: %+v", st.logs)
+	}
+}
+
+func TestSellStock_범위밖환율은_400(t *testing.T) {
+	st := &memStocks{rows: map[string]models.StockAsset{
+		"stock-1": {ID: "stock-1", Currency: "USD", Quantity: 10, AveragePrice: 14, AvgKRWPrice: 19_600},
+	}}
+	h := &Handler{stockRepo: st, stxRepo: &memSTx{}, rates: &fakeRates{live: 3000}}
+	if w := stockCall(h.sellStock, "stock-1", `{"quantity":1,"price":15}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("환율 3000 매도는 400: %d %s", w.Code, w.Body)
 	}
 }

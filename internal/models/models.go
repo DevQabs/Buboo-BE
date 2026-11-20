@@ -360,8 +360,7 @@ type CreateStockRequest struct {
 	Currency     string     `json:"currency"`
 	Sector       string     `json:"sector"`
 	Memo         string     `json:"memo"`
-	ExchangeRate float64    `json:"exchange_rate"` // USD 매수 환율. 0이면 서버가 현재 환율을 쓴다
-	PurchasedAt  *time.Time `json:"purchased_at"`  // nullable — defaults to now
+	PurchasedAt  *time.Time `json:"purchased_at"` // nullable — defaults to now
 }
 
 // UpdateStockRequest is the validated DTO for PUT /api/stocks/{id}.
@@ -423,19 +422,18 @@ type StockTransactionsFile struct {
 }
 
 // BuyRequest is the DTO for POST /api/stocks/{id}/buy.
+// 환율은 받지 않는다 — 서버가 정한다(service.ResolveTradeFX).
 type BuyRequest struct {
-	Quantity     float64 `json:"quantity"`
-	Price        float64 `json:"price"`
-	ExchangeRate float64 `json:"exchange_rate"` // USD/KRW rate at time of buy; 0 for KRW stocks
-	Memo         string  `json:"memo"`
+	Quantity float64 `json:"quantity"`
+	Price    float64 `json:"price"`
+	Memo     string  `json:"memo"`
 }
 
 // SellRequest is the DTO for POST /api/stocks/{id}/sell.
 type SellRequest struct {
-	Quantity     float64 `json:"quantity"`
-	Price        float64 `json:"price"`
-	ExchangeRate float64 `json:"exchange_rate"` // USD/KRW rate at time of sell; 0 for KRW stocks
-	Memo         string  `json:"memo"`
+	Quantity float64 `json:"quantity"`
+	Price    float64 `json:"price"`
+	Memo     string  `json:"memo"`
 }
 
 // TaxCheckResponse is returned by GET /api/stocks/{id}/tax-check.

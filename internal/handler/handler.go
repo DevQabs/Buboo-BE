@@ -47,6 +47,7 @@ type Handler struct {
 	inviteRepo     repository.InviteRepository
 	roadmapRepo    repository.RoadmapRepository
 	priceSvc       *service.PriceService
+	rates          service.USDKRWRates // 매매 환율. 운영은 priceSvc
 	savingSvc      *service.SavingService
 	jwtSecret      []byte
 	allowOrigins   []string
@@ -108,6 +109,7 @@ func New(
 		inviteRepo:     inviteRepo,
 		roadmapRepo:    roadmapRepo,
 		priceSvc:       priceSvc,
+		rates:          priceSvc,
 		savingSvc:      savingSvc,
 		jwtSecret:      jwtSecret,
 		allowOrigins:   allowOrigins,
@@ -442,7 +444,7 @@ func (h *Handler) createTransaction(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			status := http.StatusInternalServerError
-			if errors.Is(err, service.ErrBuyFX) {
+			if errors.Is(err, service.ErrTradeFX) {
 				status = http.StatusBadRequest
 			}
 			respondError(w, status, err)
@@ -763,16 +765,16 @@ func (h *Handler) createStock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	currency := strings.ToUpper(strings.TrimSpace(req.Currency))
-	fx, err := service.ResolveBuyFX(r.Context(), currency, req.ExchangeRate, h.priceSvc.FetchUSDKRW)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, err)
-		return
-	}
-
 	now := time.Now().UTC()
 	purchasedAt := now
 	if req.PurchasedAt != nil {
 		purchasedAt = *req.PurchasedAt
+	}
+	// 환율은 서버가 매수일 기준으로 정한다(화면 환율은 대체값일 수 있다).
+	fx, err := service.ResolveTradeFX(r.Context(), currency, purchasedAt, h.rates)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
 	}
 
 	asset := &models.StockAsset{
@@ -976,7 +978,8 @@ func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 	// 원화 칼럼에 넣으면 평단이 1,400분의 1로 기록된다 — MCD는 2026-06-08
 	// 환율 0 매수로 277원이 원화 평단이 됐고, 이후 매수와 섞여 18,620원으로
 	// 굳은 뒤 매도가 +72.6만원 이익으로 뒤집혔다.
-	fx, err := service.ResolveBuyFX(ctx, pre.Currency, req.ExchangeRate, h.priceSvc.FetchUSDKRW)
+	// 환율은 서버가 정한다. 매수 화면에는 날짜가 없으니 오늘(지금) 환율이다.
+	fx, err := service.ResolveTradeFX(ctx, pre.Currency, time.Time{}, h.rates)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err)
 		return
@@ -1016,7 +1019,7 @@ func (h *Handler) buyStock(w http.ResponseWriter, r *http.Request) {
 		respondTradeError(w, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, updated)
+	respondJSON(w, http.StatusOK, map[string]any{"asset": updated, "exchange_rate": fx})
 }
 
 // sellStock — POST /api/stocks/{id}/sell
@@ -1036,6 +1039,18 @@ func (h *Handler) sellStock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 환율 조회(네트워크)는 잠금 전에 끝낸다. 매도 화면에는 날짜가 없으니 오늘(지금) 환율이다.
+	pre, err := h.stockRepo.GetByID(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err)
+		return
+	}
+	fx, err := service.ResolveTradeFX(ctx, pre.Currency, time.Time{}, h.rates)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+
 	coupleID := auth.CoupleIDFromCtx(ctx)
 	var realizedPnL float64
 	var symbol string
@@ -1050,14 +1065,11 @@ func (h *Handler) sellStock(w http.ResponseWriter, r *http.Request) {
 		// 손상됐는데 조용히 달러 손익을 기록하면, 그 값이 KRW로 간주되어
 		// 양도소득세가 1,386배 어긋난다. 그래서 계산 대신 매도를 막는다.
 		if asset.Currency == "USD" {
-			if req.ExchangeRate <= 0 {
-				return nil, statusError{http.StatusBadRequest, fmt.Errorf("매도 환율이 필요합니다")}
-			}
 			if err := service.ValidateKRWCostBasis(asset.AveragePrice, asset.AvgKRWPrice); err != nil {
 				return nil, statusError{http.StatusUnprocessableEntity, err}
 			}
 			// (매도단가 × 환율 - KRW평균매입가) × 수량
-			realizedPnL = (req.Price*req.ExchangeRate - asset.AvgKRWPrice) * req.Quantity
+			realizedPnL = (req.Price*fx - asset.AvgKRWPrice) * req.Quantity
 		} else {
 			realizedPnL = (req.Price - asset.AveragePrice) * req.Quantity
 		}
@@ -1075,7 +1087,7 @@ func (h *Handler) sellStock(w http.ResponseWriter, r *http.Request) {
 			Currency:         asset.Currency,
 			AvgPriceAtTx:     asset.AveragePrice,
 			RealizedPnL:      realizedPnL,
-			ExchangeRateAtTx: req.ExchangeRate,
+			ExchangeRateAtTx: fx,
 			Memo:             req.Memo,
 			Source:           models.StockTxSourceTrade,
 		}
@@ -1089,15 +1101,17 @@ func (h *Handler) sellStock(w http.ResponseWriter, r *http.Request) {
 	}
 	if updated.Quantity <= 0 {
 		respondJSON(w, http.StatusOK, map[string]interface{}{
-			"removed":      true,
-			"realized_pnl": realizedPnL,
-			"symbol":       symbol,
+			"removed":       true,
+			"realized_pnl":  realizedPnL,
+			"symbol":        symbol,
+			"exchange_rate": fx,
 		})
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"asset":        updated,
-		"realized_pnl": realizedPnL,
+		"asset":         updated,
+		"realized_pnl":  realizedPnL,
+		"exchange_rate": fx,
 	})
 }
 

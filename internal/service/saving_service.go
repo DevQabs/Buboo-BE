@@ -31,7 +31,7 @@ type SavingService struct {
 	stockRepo repository.StockRepository
 	stxRepo   repository.StockTransactionRepository
 	assetRepo repository.OtherAssetRepository
-	usdKRW    func(context.Context) (float64, error) // 저축 경유 USD 매수 환율 조회 (PriceService.FetchUSDKRW)
+	rates     USDKRWRates // 저축 경유 USD 매수 환율(저축 날짜 기준)
 }
 
 func NewSavingService(
@@ -39,14 +39,14 @@ func NewSavingService(
 	stockRepo repository.StockRepository,
 	stxRepo repository.StockTransactionRepository,
 	assetRepo repository.OtherAssetRepository,
-	usdKRW func(context.Context) (float64, error),
+	rates USDKRWRates,
 ) *SavingService {
 	return &SavingService{
 		txRepo:    txRepo,
 		stockRepo: stockRepo,
 		stxRepo:   stxRepo,
 		assetRepo: assetRepo,
-		usdKRW:    usdKRW,
+		rates:     rates,
 	}
 }
 
@@ -150,7 +150,7 @@ func (s *SavingService) applyStock(ctx context.Context, tx *models.Transaction, 
 		if pre.CoupleID != tx.CoupleID {
 			return fmt.Errorf("stock %s not found", link.LinkAssetID)
 		}
-		fx, err := ResolveBuyFX(ctx, pre.Currency, 0, s.usdKRW)
+		fx, err := ResolveTradeFX(ctx, pre.Currency, tx.Date, s.rates)
 		if err != nil {
 			return err
 		}
@@ -196,7 +196,7 @@ func (s *SavingService) applyStock(ctx context.Context, tx *models.Transaction, 
 	if cur == "" {
 		cur = "USD"
 	}
-	fx, err := ResolveBuyFX(ctx, cur, 0, s.usdKRW)
+	fx, err := ResolveTradeFX(ctx, cur, tx.Date, s.rates)
 	if err != nil {
 		return err
 	}

@@ -108,7 +108,7 @@ func main() {
 
 	// ── Services ──────────────────────────────────────────────────────────────
 	priceSvc := service.NewPriceService()
-	savingSvc := service.NewSavingService(txRepo, stockRepo, stxRepo, assetRepo, priceSvc.FetchUSDKRW)
+	savingSvc := service.NewSavingService(txRepo, stockRepo, stxRepo, assetRepo, priceSvc)
 
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := handler.New(

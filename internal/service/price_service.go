@@ -54,6 +54,8 @@ type PriceService struct {
 	// dividends 는 야후 배당 이벤트 캐시다. 배당은 분기에 한 번 바뀌므로
 	// 시세와 같은 TTL 이면 충분하다.
 	dividends map[string]cachedDividends
+
+	fxDays map[string]float64 // "2026-11-03"(KST) → 그날 USD/KRW 종가. 지난 날 값은 바뀌지 않는다
 }
 
 // NewPriceService creates a PriceService with a shared HTTP client.
@@ -62,6 +64,7 @@ func NewPriceService() *PriceService {
 		client:    &http.Client{Timeout: httpTimeout},
 		prices:    make(map[string]cachedPrice),
 		dividends: make(map[string]cachedDividends),
+		fxDays:    make(map[string]float64),
 	}
 }
 
@@ -174,6 +177,66 @@ func (p *PriceService) FetchUSDKRW(ctx context.Context) (float64, error) {
 	p.mu.Unlock()
 
 	return rate, nil
+}
+
+type yahooHistoryResponse struct {
+	Chart struct {
+		Result []struct {
+			Timestamp  []int64 `json:"timestamp"`
+			Indicators struct {
+				Quote []struct {
+					Close []*float64 `json:"close"`
+				} `json:"quote"`
+			} `json:"indicators"`
+		} `json:"result"`
+	} `json:"chart"`
+}
+
+// FetchUSDKRWOn 은 day(KST 날짜)의 USD/KRW 종가다. 주말·휴일이면 앞선 거래일 종가.
+func (p *PriceService) FetchUSDKRWOn(ctx context.Context, day time.Time) (float64, error) {
+	key := day.In(models.KST).Format(time.DateOnly)
+	p.mu.RLock()
+	rate, ok := p.fxDays[key]
+	p.mu.RUnlock()
+	if ok {
+		return rate, nil
+	}
+
+	d, _ := time.Parse(time.DateOnly, key)
+	url := fmt.Sprintf("%s/USDKRW=X?interval=1d&period1=%d&period2=%d",
+		yahooBaseURL, d.AddDate(0, 0, -10).Unix(), d.AddDate(0, 0, 2).Unix())
+	var yr yahooHistoryResponse
+	if err := p.doRequest(ctx, url, &yr); err != nil {
+		return 0, err
+	}
+	if len(yr.Chart.Result) == 0 || len(yr.Chart.Result[0].Indicators.Quote) == 0 {
+		return 0, fmt.Errorf("no FX history for %s", key)
+	}
+	res := yr.Chart.Result[0]
+	rate = closeOnOrBefore(res.Timestamp, res.Indicators.Quote[0].Close, key)
+	if rate <= 0 {
+		return 0, fmt.Errorf("no FX close on or before %s", key)
+	}
+	p.mu.Lock()
+	p.fxDays[key] = rate
+	p.mu.Unlock()
+	return rate, nil
+}
+
+// closeOnOrBefore 는 날짜가 key 이하인 마지막 일봉 종가다. 없으면 0.
+// 야후 환율 일봉은 런던 자정(00:00 GMT, 서머타임엔 23:00 UTC 전날)에 찍혀 12시간을 더해 날짜를 읽는다.
+func closeOnOrBefore(ts []int64, closes []*float64, key string) float64 {
+	rate := 0.0
+	for i, t := range ts {
+		if i >= len(closes) || closes[i] == nil || *closes[i] <= 0 {
+			continue
+		}
+		if time.Unix(t, 0).UTC().Add(12*time.Hour).Format(time.DateOnly) > key {
+			break
+		}
+		rate = *closes[i]
+	}
+	return rate
 }
 
 // FetchUSDKRWWithFallback calls FetchUSDKRW but returns FallbackUSDKRW on error.

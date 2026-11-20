@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCapitalGainsTax_GainWithinBasicDeductionIsNotTaxed(t *testing.T) {
@@ -232,50 +233,76 @@ func TestBlendKRWCostBasis_TakesTheBuyLegForANewPosition(t *testing.T) {
 	}
 }
 
-func fixedFX(rate float64, err error) func(context.Context) (float64, error) {
-	return func(context.Context) (float64, error) { return rate, err }
+// fakeRates 는 지금 환율(live)과 날짜별 종가(on)를 돌려준다. 어느 쪽이 불렸는지 남긴다.
+type fakeRates struct {
+	live, on  float64
+	err       error
+	liveCalls int
+	onDays    []time.Time
 }
 
-func TestResolveBuyFX_KRWNeedsNoRate(t *testing.T) {
-	// KRW 종목은 환율을 조회하지 않는다. 조회되면 오류가 나도록 해 둔다.
-	fx, err := ResolveBuyFX(context.Background(), "KRW", 0, fixedFX(0, errors.New("호출되면 안 된다")))
-	if err != nil || fx != 0 {
-		t.Errorf("KRW 는 (0, nil) 이어야 한다: got (%v, %v)", fx, err)
+func (f *fakeRates) FetchUSDKRW(context.Context) (float64, error) {
+	f.liveCalls++
+	return f.live, f.err
+}
+
+func (f *fakeRates) FetchUSDKRWOn(_ context.Context, d time.Time) (float64, error) {
+	f.onDays = append(f.onDays, d)
+	return f.on, f.err
+}
+
+func TestResolveTradeFX(t *testing.T) {
+	ctx := context.Background()
+	past := time.Date(2026, 3, 9, 15, 0, 0, 0, time.UTC)
+
+	// KRW 종목은 환율을 조회하지 않는다.
+	r := &fakeRates{err: errors.New("호출되면 안 된다")}
+	if fx, err := ResolveTradeFX(ctx, "KRW", time.Time{}, r); err != nil || fx != 0 || r.liveCalls+len(r.onDays) != 0 {
+		t.Errorf("KRW 는 (0, nil), 조회 없음: (%v, %v)", fx, err)
+	}
+	// 날짜가 없거나 오늘이면 지금 환율
+	for _, at := range []time.Time{{}, time.Now()} {
+		r = &fakeRates{live: 1385.5, on: 1200}
+		if fx, err := ResolveTradeFX(ctx, "usd", at, r); err != nil || fx != 1385.5 || r.liveCalls != 1 {
+			t.Errorf("%v: 지금 환율 1385.5 여야 한다: (%v, %v)", at, fx, err)
+		}
+	}
+	// 지난 날이면 그날 종가
+	r = &fakeRates{live: 1385.5, on: 1462.3}
+	if fx, err := ResolveTradeFX(ctx, "USD", past, r); err != nil || fx != 1462.3 || r.liveCalls != 0 || len(r.onDays) != 1 || !r.onDays[0].Equal(past) {
+		t.Errorf("지난 날은 그날 종가 1462.3 여야 한다: (%v, %v) %+v", fx, err, r)
+	}
+	// 조회가 실패하면 대체 환율(1380)을 쓰지 않고 다시 시도하라는 오류
+	for _, at := range []time.Time{{}, past} {
+		fx, err := ResolveTradeFX(ctx, "USD", at, &fakeRates{err: errors.New("timeout")})
+		if !errors.Is(err, ErrTradeFX) || fx != 0 || !strings.Contains(err.Error(), "다시 시도") {
+			t.Errorf("%v: 실패는 ErrTradeFX(다시 시도) 여야 한다: (%v, %v)", at, fx, err)
+		}
+	}
+	// 범위(700~2500) 밖은 거부
+	for _, bad := range []float64{0, 1, 699, 2501} {
+		if _, err := ResolveTradeFX(ctx, "USD", time.Time{}, &fakeRates{live: bad}); !errors.Is(err, ErrTradeFX) {
+			t.Errorf("환율 %v 는 거부해야 한다: %v", bad, err)
+		}
 	}
 }
 
-func TestResolveBuyFX_PrefersTheRequestRate(t *testing.T) {
-	fx, err := ResolveBuyFX(context.Background(), "USD", 1412.5, fixedFX(1300, nil))
-	if err != nil || fx != 1412.5 {
-		t.Errorf("요청 환율을 써야 한다: got (%v, %v)", fx, err)
+func TestCloseOnOrBefore_그날이없으면앞선거래일종가(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	// 2025-11-05(수)~11-07(금), 11-10(월). 11-07 종가는 비어 있다.
+	ts := []int64{1762300800, 1762387200, 1762473600, 1762732800}
+	closes := []*float64{f(1439.8), f(1447.9), nil, f(1453.6)}
+	cases := map[string]float64{
+		"2025-11-05": 1439.8,
+		"2025-11-06": 1447.9,
+		"2025-11-08": 1447.9, // 토요일 → 금요일 종가가 비어 목요일
+		"2025-11-10": 1453.6,
+		"2025-11-04": 0,
 	}
-}
-
-func TestResolveBuyFX_FallsBackToTheCurrentRate(t *testing.T) {
-	fx, err := ResolveBuyFX(context.Background(), "usd", 0, fixedFX(1385.5, nil))
-	if err != nil || fx != 1385.5 {
-		t.Errorf("요청 환율이 없으면 현재 환율을 써야 한다: got (%v, %v)", fx, err)
-	}
-}
-
-func TestResolveBuyFX_FailsWhenNoRateIsAvailable(t *testing.T) {
-	_, err := ResolveBuyFX(context.Background(), "USD", 0, fixedFX(0, errors.New("timeout")))
-	if !errors.Is(err, ErrBuyFX) {
-		t.Errorf("환율 조회 실패는 ErrBuyFX 여야 한다: got %v", err)
-	}
-	// 저축 경로는 환율 입력칸이 없다. 직접 입력하라는 안내는 틀린 말이다.
-	if err != nil && strings.Contains(err.Error(), "직접 입력") {
-		t.Errorf("환율 조회 실패 문구는 입력 경로와 무관해야 한다: %v", err)
-	}
-}
-
-func TestResolveBuyFX_RejectsAnImplausibleRate(t *testing.T) {
-	// 화면이 환율을 모를 때 1을 보내던 버그(BuySellModal)를 막는다.
-	if _, err := ResolveBuyFX(context.Background(), "USD", 1, fixedFX(1400, nil)); !errors.Is(err, ErrBuyFX) {
-		t.Errorf("환율 1 은 거부해야 한다: got %v", err)
-	}
-	if _, err := ResolveBuyFX(context.Background(), "USD", 0, fixedFX(0, nil)); !errors.Is(err, ErrBuyFX) {
-		t.Errorf("조회 결과 0 은 거부해야 한다: got %v", err)
+	for day, want := range cases {
+		if got := closeOnOrBefore(ts, closes, day); got != want {
+			t.Errorf("%s: want %v, got %v", day, want, got)
+		}
 	}
 }
 

@@ -10,6 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/yourname/couple-app/internal/models"
 )
 
 const (
@@ -133,7 +136,7 @@ func BlendKRWCostBasis(oldQty, oldAvgUSD, oldAvgKRW, buyQty, buyPrice, buyFX flo
 }
 
 // KRWAvgAfterBuy는 매수 후 원화 평단이다. KRW 종목은 환산이 없으니
-// 달러(원래 통화) 평단과 같다. fx 는 ResolveBuyFX 의 결과다.
+// 달러(원래 통화) 평단과 같다. fx 는 ResolveTradeFX 의 결과다.
 func KRWAvgAfterBuy(currency string, oldQty, oldAvg, oldAvgKRW, buyQty, buyPrice, fx float64) float64 {
 	if !strings.EqualFold(currency, "USD") {
 		newQty := oldQty + buyQty
@@ -145,29 +148,46 @@ func KRWAvgAfterBuy(currency string, oldQty, oldAvg, oldAvgKRW, buyQty, buyPrice
 	return BlendKRWCostBasis(oldQty, oldAvg, oldAvgKRW, buyQty, buyPrice, fx)
 }
 
-// ErrBuyFX는 USD 매수 환율을 정하지 못했다는 뜻이다. 핸들러는 400으로 돌려준다.
-var ErrBuyFX = errors.New("매수 환율을 정하지 못했습니다")
+// ErrTradeFX는 USD 매매 환율을 정하지 못했다는 뜻이다. 핸들러는 400으로 돌려준다.
+var ErrTradeFX = errors.New("거래 환율을 정하지 못했어요")
 
-// ResolveBuyFX는 매수에 쓸 USD/KRW 환율을 정한다.
+// USDKRWRates 는 매매 환율을 가져오는 곳이다. 운영은 PriceService 다.
+type USDKRWRates interface {
+	FetchUSDKRW(ctx context.Context) (float64, error)                // 지금 환율
+	FetchUSDKRWOn(ctx context.Context, day time.Time) (float64, error) // 그날(앞선 거래일) 종가
+}
+
+// ResolveTradeFX는 USD 매수·매도에 쓸 USD/KRW 환율을 서버가 정한다.
 //
-// KRW 종목은 환산이 없으니 0이다. USD는 요청 환율이 있으면 그것을, 없으면
-// fetch(현재 환율)를 쓴다. 범위 밖 환율은 받지 않는다 — 화면이 환율을 모를 때
-// 1을 보내면 원화 평단이 1,400분의 1로 저장된다(MCD 277원 사례).
-// 조회 실패 시 대체 환율(FallbackUSDKRW)을 쓰지 않는다. 취득가는 세금 근거다.
-func ResolveBuyFX(ctx context.Context, currency string, reqFX float64, fetch func(context.Context) (float64, error)) (float64, error) {
+// 화면이 보낸 환율은 믿지 않는다 — 시세 조회가 실패하면 화면은 대체 환율(1380)을
+// 들고 있다. 거래일 at 이 비었거나 오늘(KST) 이후면 지금 환율, 지난 날이면 그날
+// USD/KRW 종가(쉬는 날이면 앞선 거래일)를 쓴다. 조회가 실패하면 대체 환율을 쓰지
+// 않고 오류를 낸다 — 취득가·실현손익은 세금 근거다. 범위 밖 값도 받지 않는다.
+// KRW 종목은 환산이 없으니 0이다.
+func ResolveTradeFX(ctx context.Context, currency string, at time.Time, rates USDKRWRates) (float64, error) {
 	if !strings.EqualFold(currency, "USD") {
 		return 0, nil
 	}
-	fx := reqFX
-	if fx <= 0 {
-		got, err := fetch(ctx)
-		if err != nil {
-			return 0, fmt.Errorf("%w: 환율을 가져오지 못했습니다(%v). 잠시 후 다시 시도해 주세요", ErrBuyFX, err)
-		}
-		fx = got
+	var fx float64
+	var err error
+	if at.IsZero() || at.In(models.KST).Format(time.DateOnly) >= time.Now().In(models.KST).Format(time.DateOnly) {
+		fx, err = rates.FetchUSDKRW(ctx)
+	} else {
+		fx, err = rates.FetchUSDKRWOn(ctx, at)
 	}
-	if fx < minPlausibleUSDKRW || fx > maxPlausibleUSDKRW {
-		return 0, fmt.Errorf("%w: 환율 %.2f 이(가) 허용 범위(%d~%d) 밖입니다", ErrBuyFX, fx, minPlausibleUSDKRW, maxPlausibleUSDKRW)
+	if err != nil {
+		return 0, fmt.Errorf("%w: 환율을 가져오지 못했어요(%v). 잠시 후 다시 시도해 주세요", ErrTradeFX, err)
+	}
+	if err := CheckFX(fx); err != nil {
+		return 0, err
 	}
 	return fx, nil
+}
+
+// CheckFX는 USD/KRW 환율이 있을 법한 범위(700~2500) 안인지 본다.
+func CheckFX(fx float64) error {
+	if fx < minPlausibleUSDKRW || fx > maxPlausibleUSDKRW {
+		return fmt.Errorf("%w: 환율 %.2f 이(가) 허용 범위(%d~%d) 밖이에요", ErrTradeFX, fx, minPlausibleUSDKRW, maxPlausibleUSDKRW)
+	}
+	return nil
 }
